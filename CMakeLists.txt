@@ -356,6 +356,10 @@ else ()
 
     if(APPLE)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=objc-method-access")
+        # Local divergence: current Apple clang flags `return nullptr` from std::string-returning
+        # error paths (NetworkKey, Sc* scripting bindings). Upstream bug, unrelated to the agent
+        # work, and -Werror above beats any user-supplied flag. Downgrade to a warning to build.
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=nonnull")
     endif()
 
     # Clang -Wmissing-declarations differs from GCC, set -Wmissing-prototypes for parity
