@@ -1296,6 +1296,18 @@ namespace OpenRCT2
 
             _uiContext->ProcessMessages();
 
+            // park-fork pacing patch (F1): --no-throttle forces the accumulator to exactly
+            // one tick's worth so the while loop below runs exactly one Tick() per
+            // RunFixedFrame call, instead of waiting for wall-clock deltaTime to fill it.
+            // Only headless and only while unpaused -- the harness holds the park paused
+            // between commands, and an unthrottled paused loop would busy-wait at full CPU
+            // for nothing. GUI path is untouched (gOpenRCT2Headless guards it), and with
+            // the flag off (default) behavior is unchanged from stock.
+            if (gOpenRCT2NoThrottle && gOpenRCT2Headless && GameIsNotPaused())
+            {
+                _ticksAccumulator = kGameUpdateTimeMS;
+            }
+
             if (_ticksAccumulator < kGameUpdateTimeMS)
             {
                 const auto sleepTimeSec = std::min(kNetworkUpdateTimeMS, kGameUpdateTimeMS - _ticksAccumulator);

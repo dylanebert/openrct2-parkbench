@@ -46,6 +46,9 @@ extern u8string gCustomRCT2DataPath;
 extern u8string gCustomPassword;
 extern bool gOpenRCT2Headless;
 extern bool gOpenRCT2NoGraphics;
+// park-fork pacing patch (F1): skips RunFixedFrame's real-time sleep while
+// headless and unpaused. Default false; behavior-identical to stock when off.
+extern bool gOpenRCT2NoThrottle;
 extern bool gOpenRCT2ShowChangelog;
 extern bool gOpenRCT2SilentBreakpad;
 extern u8string gSilentRecordingName;
