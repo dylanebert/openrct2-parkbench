@@ -1414,15 +1414,56 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
     std::string outPath = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user, DirId::replayRecordings);
     name = Path::Combine(outPath, name);
 
-    // If ticks are specified by user use that otherwise maximum ticks specified by const.
+    // Sniff the silent token out of argv[1..] (not positional -- see the
+    // trap below).  Remove it, then parse at most one remaining token as
+    // max_ticks.  An unrecognized extra token refuses loudly rather than
+    // being silently ignored, because a silently-dropped flag is precisely
+    // how this change would appear to work while recording normally at 1/5
+    // the speed.
+    //
+    // The trap: maxTicks is parsed with atol and StartRecording branches
+    // if (maxTicks != k_MaxReplayTicks) replayData->tickEnd = currentTicks
+    // + maxTicks, so a positional third argument would force a caller to
+    // pass a real tick budget to reach the flag, and passing 0 for "no
+    // budget" yields tickEnd == currentTicks -- a recording that ends on
+    // the tick it starts.  The sniff avoids this entirely.
     uint32_t maxTicks = k_MaxReplayTicks;
-    if (argv.size() >= 2)
+    auto recordType = IReplayManager::RecordType::NORMAL;
+    bool sawSilent = false;
+    std::vector<std::string> remaining;
+    for (size_t i = 1; i < argv.size(); i++)
     {
-        maxTicks = atol(argv[1].c_str());
+        if (argv[i] == "silent")
+        {
+            if (sawSilent)
+            {
+                console.WriteFormatLine("Duplicate token 'silent' -- recording not started.");
+                return;
+            }
+            sawSilent = true;
+        }
+        else
+        {
+            remaining.push_back(argv[i]);
+        }
+    }
+    if (sawSilent)
+        recordType = IReplayManager::RecordType::SILENT;
+    if (remaining.size() > 1)
+    {
+        console.WriteFormatLine(
+            "Unrecognized extra token '%s' -- recording not started. "
+            "Usage: replay_startrecord <name> [max_ticks] [silent]",
+            remaining[1].c_str());
+        return;
+    }
+    if (!remaining.empty())
+    {
+        maxTicks = atol(remaining[0].c_str());
     }
 
     auto* replayManager = GetContext()->GetReplayManager();
-    if (replayManager->StartRecording(name, maxTicks))
+    if (replayManager->StartRecording(name, maxTicks, recordType))
     {
         ReplayRecordInfo info;
         replayManager->GetCurrentReplayInfo(info);
@@ -1868,7 +1909,7 @@ static constexpr ConsoleCommand console_command_table[] = {
       "variables" },
     { "windows", ConsoleCommandWindows, "Lists all the windows that can be opened.", "windows" },
     { "replay_startrecord", ConsoleCommandReplayStartRecord, "Starts recording a new replay.",
-      "replay_startrecord <name> [max_ticks]" },
+      "replay_startrecord <name> [max_ticks] [silent]" },
     { "replay_stoprecord", ConsoleCommandReplayStopRecord, "Stops recording a new replay.", "replay_stoprecord" },
     { "replay_start", ConsoleCommandReplayStart, "Starts a replay", "replay_start <name>" },
     { "replay_stop", ConsoleCommandReplayStop, "Stops the replay", "replay_stop" },
