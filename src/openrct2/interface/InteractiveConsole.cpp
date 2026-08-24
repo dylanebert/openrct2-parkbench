@@ -1428,15 +1428,25 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
     // budget" yields tickEnd == currentTicks -- a recording that ends on
     // the tick it starts.  The sniff avoids this entirely.
     //
-    // Numeric validation: atol tolerates non-numeric input by returning 0,
-    // so a single unrecognized token (e.g. "silnet", "Silent", "silent2",
-    // "bogus") would be silently atol'd to 0, setting maxTicks=0 and
-    // tickEnd == currentTicks -- the same near-empty recording the trap
-    // describes.  Refusing any non-digit token closes that hole and makes
-    // the refusal one rule: a token that is not entirely digits is
-    // unrecognized, period.  This replaces the former remaining.size() > 1
-    // check, which only refused when two or more tokens remained and let
-    // every single-token miss (the realistic human-error class) through.
+    // Two legs, both required, neither sufficient:
+    //   1. Count: at most one token remains after silent removal
+    //      (remaining.size() <= 1).  Two or more refuse.
+    //   2. Shape: the single remaining token, if present, is entirely
+    //      digits.  A non-digit token refuses.
+    // Round 1 had only the count leg (remaining.size() > 1); round 2
+    // had only the shape leg (all-digits).  Each was green at its own
+    // gate and each left a hole in the dimension its fixtures did not
+    // vary -- round 1 let every single-token typo through, round 2 let
+    // every multi-digit-token pair through.  Both legs are checked now.
+    //
+    // The shape leg exists because atol tolerates non-numeric input by
+    // returning 0, so a single unrecognized token (e.g. "silnet",
+    // "Silent", "silent2", "bogus") would be silently atol'd to 0,
+    // setting maxTicks=0 and tickEnd == currentTicks -- the same
+    // near-empty recording the trap describes.
+    // The count leg exists because two all-digit tokens (e.g. "500 1000")
+    // pass the shape leg but the second is unrecognized; without the
+    // count leg it would be silently atol'd and dropped.
     uint32_t maxTicks = k_MaxReplayTicks;
     auto recordType = IReplayManager::RecordType::NORMAL;
     bool sawSilent = false;
@@ -1459,14 +1469,24 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
     }
     if (sawSilent)
         recordType = IReplayManager::RecordType::SILENT;
-    // A remaining token that is not entirely digits is unrecognized and
-    // refuses loudly.  This is the sole refusal check for remaining tokens,
-    // replacing the former remaining.size() > 1 condition: that check
-    // only refused when two or more tokens remained, leaving every
-    // single-token miss (e.g. "silnet", "Silent", "silent2", "bogus") to be
-    // atol'd to 0 and start a near-empty recording.
-    for (const auto& token : remaining)
+
+    // Leg 1 -- count: at most one remaining token after silent removal.
+    if (remaining.size() > 1)
     {
+        console.WriteFormatLine(
+            "Too many arguments -- recording not started. "
+            "Usage: replay_startrecord <name> [max_ticks] [silent]");
+        return;
+    }
+    // Leg 2 -- shape: the single remaining token, if present, must be
+    // entirely digits.  atol tolerates non-numeric input by returning 0,
+    // so without this check a single unrecognized token (e.g. "silnet",
+    // "Silent", "silent2", "bogus") would be silently atol'd to 0,
+    // setting maxTicks=0 and tickEnd == currentTicks -- the same
+    // near-empty recording the trap describes.
+    if (!remaining.empty())
+    {
+        const auto& token = remaining[0];
         bool allDigits = !token.empty();
         for (char c : token)
         {
@@ -1484,10 +1504,7 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
                 token.c_str());
             return;
         }
-    }
-    if (!remaining.empty())
-    {
-        maxTicks = atol(remaining[0].c_str());
+        maxTicks = atol(token.c_str());
     }
 
     auto* replayManager = GetContext()->GetReplayManager();
