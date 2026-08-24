@@ -1416,10 +1416,10 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
 
     // Sniff the silent token out of argv[1..] (not positional -- see the
     // trap below).  Remove it, then parse at most one remaining token as
-    // max_ticks.  An unrecognized extra token refuses loudly rather than
-    // being silently ignored, because a silently-dropped flag is precisely
-    // how this change would appear to work while recording normally at 1/5
-    // the speed.
+    // max_ticks.  A remaining token that is not entirely digits is
+    // unrecognized and refuses loudly, because a silently-dropped flag is
+    // precisely how this change would appear to work while recording
+    // normally at 1/5 the speed.
     //
     // The trap: maxTicks is parsed with atol and StartRecording branches
     // if (maxTicks != k_MaxReplayTicks) replayData->tickEnd = currentTicks
@@ -1427,6 +1427,16 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
     // pass a real tick budget to reach the flag, and passing 0 for "no
     // budget" yields tickEnd == currentTicks -- a recording that ends on
     // the tick it starts.  The sniff avoids this entirely.
+    //
+    // Numeric validation: atol tolerates non-numeric input by returning 0,
+    // so a single unrecognized token (e.g. "silnet", "Silent", "silent2",
+    // "bogus") would be silently atol'd to 0, setting maxTicks=0 and
+    // tickEnd == currentTicks -- the same near-empty recording the trap
+    // describes.  Refusing any non-digit token closes that hole and makes
+    // the refusal one rule: a token that is not entirely digits is
+    // unrecognized, period.  This replaces the former remaining.size() > 1
+    // check, which only refused when two or more tokens remained and let
+    // every single-token miss (the realistic human-error class) through.
     uint32_t maxTicks = k_MaxReplayTicks;
     auto recordType = IReplayManager::RecordType::NORMAL;
     bool sawSilent = false;
@@ -1449,13 +1459,31 @@ static void ConsoleCommandReplayStartRecord(InteractiveConsole& console, const a
     }
     if (sawSilent)
         recordType = IReplayManager::RecordType::SILENT;
-    if (remaining.size() > 1)
+    // A remaining token that is not entirely digits is unrecognized and
+    // refuses loudly.  This is the sole refusal check for remaining tokens,
+    // replacing the former remaining.size() > 1 condition: that check
+    // only refused when two or more tokens remained, leaving every
+    // single-token miss (e.g. "silnet", "Silent", "silent2", "bogus") to be
+    // atol'd to 0 and start a near-empty recording.
+    for (const auto& token : remaining)
     {
-        console.WriteFormatLine(
-            "Unrecognized extra token '%s' -- recording not started. "
-            "Usage: replay_startrecord <name> [max_ticks] [silent]",
-            remaining[1].c_str());
-        return;
+        bool allDigits = !token.empty();
+        for (char c : token)
+        {
+            if (c < '0' || c > '9')
+            {
+                allDigits = false;
+                break;
+            }
+        }
+        if (!allDigits)
+        {
+            console.WriteFormatLine(
+                "Unrecognized token '%s' -- recording not started. "
+                "Usage: replay_startrecord <name> [max_ticks] [silent]",
+                token.c_str());
+            return;
+        }
     }
     if (!remaining.empty())
     {
