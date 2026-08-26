@@ -58,6 +58,7 @@ namespace OpenRCT2
     static bool _verbose = false;
     static bool _headless = false;
     static bool _noThrottle = false;
+    static bool _headlessGraphics = false;
     static bool _silentReplays = false;
     static u8string _password = {};
     static u8string _userDataPath = {};
@@ -77,6 +78,7 @@ namespace OpenRCT2
         { CMDLINE_TYPE_SWITCH,  &_verbose,          kNAC, "verbose",            "log verbose messages"                                       },
         { CMDLINE_TYPE_SWITCH,  &_headless,         kNAC, "headless",           "run " OPENRCT2_NAME " headless" IMPLIES_SILENT_BREAKPAD     },
         { CMDLINE_TYPE_SWITCH,  &_noThrottle,       kNAC, "no-throttle",        "headless only: skip the fixed-frame real-time sleep while unpaused (default off)" },
+        { CMDLINE_TYPE_SWITCH,  &_headlessGraphics, kNAC, "headless-graphics",  "headless only: load base graphics so captureImage can render (default off)" },
         { CMDLINE_TYPE_SWITCH,  &_silentReplays,    kNAC, "silent-replays",     "use unobtrusive replays"                                    },
     #ifndef DISABLE_NETWORK
         { CMDLINE_TYPE_INTEGER, &_port,             kNAC, "port",               "port to use for hosting or joining a server"                },
@@ -202,7 +204,7 @@ namespace OpenRCT2
         }
 
         gOpenRCT2Headless = _headless;
-        gOpenRCT2NoGraphics = _headless;
+        gOpenRCT2NoGraphics = _headless && !_headlessGraphics;
         gOpenRCT2NoThrottle = _noThrottle;
         gOpenRCT2SilentBreakpad = _silentBreakpad || _headless;
 
