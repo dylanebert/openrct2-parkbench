@@ -24,7 +24,11 @@ int main(int argc, const char** argv)
     if (runGame == ExitCode::launch)
     {
         gOpenRCT2Headless = true;
-        gOpenRCT2NoGraphics = true;
+        // The CLI is inherently headless, but the fork's --headless-graphics
+        // switch opts a headless launch into loading base graphics so
+        // captureImage can render. Honour what CommandLineRun parsed rather
+        // than clobbering gOpenRCT2NoGraphics back on.
+        gOpenRCT2NoGraphics = !gOpenRCT2HeadlessGraphics;
 
         // Run OpenRCT2 with a plain context
         auto context = CreateContext();

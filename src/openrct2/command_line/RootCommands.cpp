@@ -50,6 +50,9 @@ namespace OpenRCT2
     static u8string _address;
 #endif
 
+    // The fork's --headless-graphics switch, published for openrct2-cli's
+    // entry point (declared in CommandLine.hpp).
+    bool gOpenRCT2HeadlessGraphics = false;
     static bool _help = false;
     static bool _version = false;
     static bool _noInstall = false;
@@ -205,6 +208,7 @@ namespace OpenRCT2
 
         gOpenRCT2Headless = _headless;
         gOpenRCT2NoGraphics = _headless && !_headlessGraphics;
+        gOpenRCT2HeadlessGraphics = _headlessGraphics;
         gOpenRCT2NoThrottle = _noThrottle;
         gOpenRCT2SilentBreakpad = _silentBreakpad || _headless;
 

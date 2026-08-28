@@ -16,6 +16,14 @@
 namespace OpenRCT2
 {
     /**
+     * The fork's --headless-graphics switch, parsed by the root command handler and
+     * exported here so openrct2-cli's entry point can honour it instead of clobbering
+     * gOpenRCT2NoGraphics back on. Lives in this header rather than OpenRCT2.h so the
+     * rebuild surface stays narrow (OpenRCT2.h is included by most of the library).
+     */
+    extern bool gOpenRCT2HeadlessGraphics;
+
+    /**
      * Class for enumerating and retrieving values for a set of command line arguments.
      */
     class CommandLineArgEnumerator final
