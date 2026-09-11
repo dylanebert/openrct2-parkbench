@@ -39,6 +39,7 @@
 #include "core/Path.hpp"
 #include "core/String.hpp"
 #include "core/Timer.hpp"
+#include "command_line/CommandLine.hpp"
 #include "drawing/ColourMap.h"
 #include "drawing/Drawing.h"
 #include "drawing/IDrawingEngine.h"
@@ -1109,6 +1110,15 @@ namespace OpenRCT2
             }
 
             _sceneManager->setActiveScene(nextScene);
+            if (CommandLine::gNativeTransactionProofResult)
+            {
+                if (nextScene == _sceneManager->getGameScene())
+                {
+                    CommandLine::RunNativeTransactionProofResult(gOpenRCT2StartupActionPath);
+                }
+                Finish();
+                return;
+            }
             InitNetworkGame(nextScene == _sceneManager->getGameScene());
         }
 
@@ -1182,6 +1192,10 @@ namespace OpenRCT2
             else
             {
                 SwitchToStartUpScene();
+            }
+            if (CommandLine::gNativeTransactionProofResult)
+            {
+                return;
             }
 #ifdef __EMSCRIPTEN__
             emscripten_set_main_loop_arg(
