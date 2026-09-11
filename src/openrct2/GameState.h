@@ -106,6 +106,14 @@ namespace OpenRCT2
 
     void gameStateInitAll(GameState_t& gameState, const TileCoordsXY& mapSize);
     void gameStateTick();
+
+    /**
+     * Advance a paused game through the existing single-update seam exactly
+     * ``updates`` times. This proof-only entry point refuses an unpaused
+     * caller and leaves the game paused after every accepted update.
+     */
+    bool gameStateAdvancePausedNativeTransaction(uint32_t updates);
+
     void gameStateUpdateLogic();
 
 } // namespace OpenRCT2

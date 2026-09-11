@@ -237,6 +237,28 @@ namespace OpenRCT2
         gDoSingleUpdate = false;
     }
 
+    bool gameStateAdvancePausedNativeTransaction(uint32_t updates)
+    {
+        if (GameIsNotPaused())
+            return false;
+
+        for (uint32_t i = 0; i < updates; i++)
+        {
+            if (GameIsNotPaused())
+                return false;
+
+            // Reuse the existing paused single-update seam. gameStateTick()
+            // consumes this flag, runs one gameStateUpdateLogic(), and
+            // restores the paused state before returning.
+            gDoSingleUpdate = true;
+            gameStateTick();
+
+            if (GameIsNotPaused())
+                return false;
+        }
+        return true;
+    }
+
     static void gameStateCreateStateSnapshot()
     {
         PROFILED_FUNCTION();
