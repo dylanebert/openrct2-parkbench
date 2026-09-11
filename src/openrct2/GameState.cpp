@@ -268,7 +268,7 @@ namespace OpenRCT2
             state.currentTicks = getGameState().currentTicks;
             return true;
         }
-    }
+    } // namespace
 
     bool gameStateAdvancePausedNativeTransaction(uint32_t updates)
     {

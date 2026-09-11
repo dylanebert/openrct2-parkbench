@@ -7,14 +7,12 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 
-#include "CommandLine.hpp"
-
 #include "../Context.h"
 #include "../Game.h"
 #include "../GameState.h"
 #include "../OpenRCT2.h"
-#include "../ReplayManager.h"
 #include "../PlatformEnvironment.h"
+#include "../ReplayManager.h"
 #include "../Version.h"
 #include "../actions/CommandFlag.h"
 #include "../actions/GameActionRunner.h"
@@ -28,6 +26,7 @@
 #include "../world/Map.h"
 #include "../world/TileElementsView.h"
 #include "../world/tile_element/PathElement.h"
+#include "CommandLine.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -48,8 +47,8 @@ namespace OpenRCT2::CommandLine
     namespace
     {
         constexpr uint32_t kNativeTransactionProofUpdates = 256;
-        constexpr const char* kNativeTransactionCheckpointSha256
-            = "26365ce8ac1c12f02128ce811d6c0d1e5858e72c55081a16c79a6873b8d24907";
+        constexpr const char* kNativeTransactionCheckpointSha256 = "26365ce8ac1c12f02128ce811d6c0d1e5858e72c55081a16c79a6873b8d"
+                                                                   "24907";
         constexpr const char* kNativeTransactionAction = "footpathplace";
         constexpr int32_t kNativeTransactionTargetX = 113;
         constexpr int32_t kNativeTransactionTargetY = 12;
@@ -132,7 +131,8 @@ namespace OpenRCT2::CommandLine
                 getGameState().entities.GetEntityListCount(EntityType::guest),
                 getGameState().entities.GetEntityListCount(EntityType::staff),
                 static_cast<uint16_t>(std::count_if(
-                    getGameState().rides.begin(), getGameState().rides.end(), [](const auto& ride) { return ride.id != RideId::GetNull(); })),
+                    getGameState().rides.begin(), getGameState().rides.end(),
+                    [](const auto& ride) { return ride.id != RideId::GetNull(); })),
                 getGameState().entities.GetEntityListCount(EntityType::vehicle),
                 {},
             };
@@ -154,16 +154,15 @@ namespace OpenRCT2::CommandLine
             {
                 if (i != 0)
                     output << ',';
-                output << "{\"baseZ\":" << state.path[i].baseZ << ",\"edges\":"
-                       << static_cast<uint32_t>(state.path[i].edges) << ",\"type\":\"footpath\"}";
+                output << "{\"baseZ\":" << state.path[i].baseZ << ",\"edges\":" << static_cast<uint32_t>(state.path[i].edges)
+                       << ",\"type\":\"footpath\"}";
             }
-            output << "],\"scenarioRng\":{\"s0\":" << state.scenarioRngS0 << ",\"s1\":"
-                   << state.scenarioRngS1 << "},\"tick\":" << state.tick << '}';
+            output << "],\"scenarioRng\":{\"s0\":" << state.scenarioRngS0 << ",\"s1\":" << state.scenarioRngS1
+                   << "},\"tick\":" << state.tick << '}';
         }
 
         void WriteResult(
-            const NativeTransactionState& before, const NativeTransactionState& after, bool queryAccepted,
-            bool executeAccepted)
+            const NativeTransactionState& before, const NativeTransactionState& after, bool queryAccepted, bool executeAccepted)
         {
             std::ostringstream output;
             output << "{\"after\":";
@@ -177,13 +176,12 @@ namespace OpenRCT2::CommandLine
                 engineVersion += sizeof(kVersionPrefix) - 1;
             output << "\"engine\":{\"commit\":\"" << OPENRCT2_COMMIT_SHA1_FULL << "\",\"version\":\"";
             output << engineVersion << "\"},\"instance\":\"native-transaction-proof\",";
-            output << "\"request\":{\"action\":\"" << kNativeTransactionAction << "\",\"baseZ\":"
-                   << kNativeTransactionBaseZ << ",\"neighbor\":[" << kNativeTransactionNeighborX << ','
-                   << kNativeTransactionNeighborY << "],\"target\":[" << kNativeTransactionTargetX << ','
-                   << kNativeTransactionTargetY << "],\"ticks\":" << kNativeTransactionProofUpdates << "},";
+            output << "\"request\":{\"action\":\"" << kNativeTransactionAction << "\",\"baseZ\":" << kNativeTransactionBaseZ
+                   << ",\"neighbor\":[" << kNativeTransactionNeighborX << ',' << kNativeTransactionNeighborY << "],\"target\":["
+                   << kNativeTransactionTargetX << ',' << kNativeTransactionTargetY
+                   << "],\"ticks\":" << kNativeTransactionProofUpdates << "},";
             output << "\"schema\":\"park-native-transaction/v1\",\"verdict\":{\"execute\":"
-                   << (executeAccepted ? "true" : "false") << ",\"query\":" << (queryAccepted ? "true" : "false")
-                   << "}}\n";
+                   << (executeAccepted ? "true" : "false") << ",\"query\":" << (queryAccepted ? "true" : "false") << "}}\n";
             std::fwrite(output.str().data(), 1, output.str().size(), stdout);
         }
 
@@ -202,14 +200,14 @@ namespace OpenRCT2::CommandLine
 
         NativeTransactionProofState unpaused{ false, 0 };
         const bool unpausedRefusal = !gameStateAdvancePausedNativeTransaction(
-            kNativeTransactionProofUpdates, unpaused, proofStep)
+                                         kNativeTransactionProofUpdates, unpaused, proofStep)
             && !unpaused.paused && unpaused.currentTicks == 0;
 
         if (!(exact && shortArm && longArm && unpausedRefusal))
         {
-            std::fprintf(stderr,
-                "native-transaction-proof: FAIL exact=%d n-1=%d n+1=%d unpaused=%d\n",
-                exact, shortArm, longArm, unpausedRefusal);
+            std::fprintf(
+                stderr, "native-transaction-proof: FAIL exact=%d n-1=%d n+1=%d unpaused=%d\n", exact, shortArm, longArm,
+                unpausedRefusal);
             return ExitCode::fail;
         }
 
@@ -242,11 +240,10 @@ namespace OpenRCT2::CommandLine
         if (!GameIsPaused())
             return FailNativeTransaction("checkpoint was not loaded paused");
 
-        const auto neighbor = TileCoordsXYZ{
-            kNativeTransactionNeighborX, kNativeTransactionNeighborY, kNativeTransactionBaseZ / kCoordsZStep };
-        const auto target = CoordsXYZ{
-            kNativeTransactionTargetX * kCoordsXYStep, kNativeTransactionTargetY * kCoordsXYStep,
-            kNativeTransactionBaseZ };
+        const auto neighbor = TileCoordsXYZ{ kNativeTransactionNeighborX, kNativeTransactionNeighborY,
+                                             kNativeTransactionBaseZ / kCoordsZStep };
+        const auto target = CoordsXYZ{ kNativeTransactionTargetX * kCoordsXYStep, kNativeTransactionTargetY * kCoordsXYStep,
+                                       kNativeTransactionBaseZ };
         auto* neighborPath = MapGetPathElementAt(neighbor);
         if (neighborPath == nullptr || neighborPath->getBaseZ() != kNativeTransactionBaseZ)
             return FailNativeTransaction("fixed neighbor path was not found");
@@ -291,8 +288,7 @@ namespace OpenRCT2::CommandLine
         }
 
         NativeTransactionProofState stepState{ GameIsPaused(), before.tick };
-        if (!gameStateAdvancePausedNativeTransaction(
-                kNativeTransactionProofUpdates, stepState, nativeTransactionEngineStep))
+        if (!gameStateAdvancePausedNativeTransaction(kNativeTransactionProofUpdates, stepState, nativeTransactionEngineStep))
         {
             replayManager->StopRecording(true);
             return FailNativeTransaction("native exact-step transaction was refused");
