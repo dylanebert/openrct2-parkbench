@@ -519,3 +519,7 @@ namespace OpenRCT2
         return ExitCode::ok;
     }
 } // namespace OpenRCT2
+
+// Keep the proof linked into the legacy Visual Studio targets, whose project
+// files predate the proof source. CMake removes the standalone source above.
+#include "NativeTransactionProof.cpp"
