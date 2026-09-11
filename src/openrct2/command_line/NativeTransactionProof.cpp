@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -65,7 +66,8 @@ namespace OpenRCT2::CommandLine
         struct NativeTransactionState
         {
             uint32_t tick;
-            uint32_t scenarioRng;
+            uint32_t scenarioRngS0;
+            uint32_t scenarioRngS1;
             money64 cash;
             money64 loan;
             uint16_t guests;
@@ -120,9 +122,11 @@ namespace OpenRCT2::CommandLine
         NativeTransactionState CaptureState()
         {
             const auto target = TileCoordsXY{ kNativeTransactionTargetX, kNativeTransactionTargetY };
+            const auto scenarioRng = ScenarioRandState();
             NativeTransactionState state{
                 getGameState().currentTicks,
-                ScenarioRandState().s0,
+                scenarioRng.s0,
+                scenarioRng.s1,
                 getGameState().park.cash,
                 getGameState().park.bankLoan,
                 getGameState().entities.GetEntityListCount(EntityType::guest),
@@ -153,7 +157,8 @@ namespace OpenRCT2::CommandLine
                 output << "{\"baseZ\":" << state.path[i].baseZ << ",\"edges\":"
                        << static_cast<uint32_t>(state.path[i].edges) << ",\"type\":\"footpath\"}";
             }
-            output << "],\"scenarioRng\":" << state.scenarioRng << ",\"tick\":" << state.tick << '}';
+            output << "],\"scenarioRng\":{\"s0\":" << state.scenarioRngS0 << ",\"s1\":"
+                   << state.scenarioRngS1 << "},\"tick\":" << state.tick << '}';
         }
 
         void WriteResult(
@@ -166,8 +171,12 @@ namespace OpenRCT2::CommandLine
             output << ",\"before\":";
             WriteState(output, before);
             output << ",\"checkpointSha256\":\"" << kNativeTransactionCheckpointSha256 << "\",";
+            constexpr char kVersionPrefix[] = "OpenRCT2, ";
+            const char* engineVersion = gVersionInfoFull;
+            if (std::strncmp(engineVersion, kVersionPrefix, sizeof(kVersionPrefix) - 1) == 0)
+                engineVersion += sizeof(kVersionPrefix) - 1;
             output << "\"engine\":{\"commit\":\"" << OPENRCT2_COMMIT_SHA1_FULL << "\",\"version\":\"";
-            output << gVersionInfoFull << "\"},\"instance\":\"native-transaction-proof\",";
+            output << engineVersion << "\"},\"instance\":\"native-transaction-proof\",";
             output << "\"request\":{\"action\":\"" << kNativeTransactionAction << "\",\"baseZ\":"
                    << kNativeTransactionBaseZ << ",\"neighbor\":[" << kNativeTransactionNeighborX << ','
                    << kNativeTransactionNeighborY << "],\"target\":[" << kNativeTransactionTargetX << ','
