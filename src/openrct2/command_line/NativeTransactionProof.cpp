@@ -9,6 +9,8 @@
 
 #include "CommandLine.hpp"
 
+#include "../GameState.h"
+
 #include <cstdint>
 #include <cstdio>
 
@@ -18,33 +20,21 @@ namespace OpenRCT2::CommandLine
     {
         constexpr uint32_t kNativeTransactionProofUpdates = 256;
 
-        struct PausedSingleUpdateProofSeam
+        bool proofStep(NativeTransactionProofState& state)
         {
-            bool paused = true;
-            uint32_t updates = 0;
-
-            bool singleUpdate()
-            {
-                if (!paused)
-                    return false;
-                paused = false;
-                updates++;
-                paused = true;
-                return true;
-            }
-        };
+            if (!state.paused)
+                return false;
+            state.paused = false;
+            state.currentTicks++;
+            state.paused = true;
+            return true;
+        }
 
         bool runExactArm(uint32_t requested, uint32_t expected)
         {
-            PausedSingleUpdateProofSeam seam;
-            if (!seam.paused)
-                return false;
-            for (uint32_t i = 0; i < requested; i++)
-            {
-                if (!seam.singleUpdate())
-                    return false;
-            }
-            return seam.paused && seam.updates == expected;
+            NativeTransactionProofState state{ true, 0 };
+            const bool accepted = gameStateAdvancePausedNativeTransaction(requested, state, proofStep);
+            return accepted && state.paused && state.currentTicks == expected;
         }
     }
 
@@ -54,9 +44,10 @@ namespace OpenRCT2::CommandLine
         const bool shortArm = !runExactArm(kNativeTransactionProofUpdates - 1, kNativeTransactionProofUpdates);
         const bool longArm = !runExactArm(kNativeTransactionProofUpdates + 1, kNativeTransactionProofUpdates);
 
-        PausedSingleUpdateProofSeam unpaused;
-        unpaused.paused = false;
-        const bool unpausedRefusal = !unpaused.singleUpdate();
+        NativeTransactionProofState unpaused{ false, 0 };
+        const bool unpausedRefusal = !gameStateAdvancePausedNativeTransaction(
+            kNativeTransactionProofUpdates, unpaused, proofStep)
+            && !unpaused.paused && unpaused.currentTicks == 0;
 
         if (!(exact && shortArm && longArm && unpausedRefusal))
         {

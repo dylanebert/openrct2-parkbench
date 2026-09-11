@@ -237,26 +237,43 @@ namespace OpenRCT2
         gDoSingleUpdate = false;
     }
 
-    bool gameStateAdvancePausedNativeTransaction(uint32_t updates)
+    bool gameStateAdvancePausedNativeTransaction(
+        uint32_t updates, NativeTransactionProofState& state, NativeTransactionStep step)
     {
-        if (GameIsNotPaused())
+        if (!state.paused || step == nullptr)
             return false;
 
         for (uint32_t i = 0; i < updates; i++)
         {
-            if (GameIsNotPaused())
+            if (!state.paused)
                 return false;
 
-            // Reuse the existing paused single-update seam. gameStateTick()
-            // consumes this flag, runs one gameStateUpdateLogic(), and
-            // restores the paused state before returning.
-            gDoSingleUpdate = true;
-            gameStateTick();
-
-            if (GameIsNotPaused())
+            const auto ticksBefore = state.currentTicks;
+            if (!step(state) || !state.paused || state.currentTicks != ticksBefore + 1)
                 return false;
         }
         return true;
+    }
+
+    namespace
+    {
+        bool advanceNativeTransactionStep(NativeTransactionProofState& state)
+        {
+            if (GameIsNotPaused())
+                return false;
+
+            gDoSingleUpdate = true;
+            gameStateTick();
+            state.paused = GameIsPaused();
+            state.currentTicks = getGameState().currentTicks;
+            return true;
+        }
+    }
+
+    bool gameStateAdvancePausedNativeTransaction(uint32_t updates)
+    {
+        NativeTransactionProofState state{ GameIsPaused(), getGameState().currentTicks };
+        return gameStateAdvancePausedNativeTransaction(updates, state, advanceNativeTransactionStep);
     }
 
     static void gameStateCreateStateSnapshot()

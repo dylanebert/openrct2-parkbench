@@ -107,6 +107,22 @@ namespace OpenRCT2
     void gameStateInitAll(GameState_t& gameState, const TileCoordsXY& mapSize);
     void gameStateTick();
 
+    struct NativeTransactionProofState
+    {
+        bool paused;
+        uint32_t currentTicks;
+    };
+
+    using NativeTransactionStep = bool (*)(NativeTransactionProofState& state);
+
+    /**
+     * Apply the proof-specific exact-step transform to a paused state. The
+     * transform independently observes one currentTicks increment and a
+     * paused state after every accepted step.
+     */
+    bool gameStateAdvancePausedNativeTransaction(
+        uint32_t updates, NativeTransactionProofState& state, NativeTransactionStep step);
+
     /**
      * Advance a paused game through the existing single-update seam exactly
      * ``updates`` times. This proof-only entry point refuses an unpaused
