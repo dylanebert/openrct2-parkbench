@@ -221,7 +221,21 @@ namespace OpenRCT2::CommandLine
             return ExitCode::fail;
 
         const char* checkpointPath = nullptr;
-        if (!enumerator->TryPopString(&checkpointPath) || enumerator->TryPop())
+        bool invalidArguments = !enumerator->TryPopString(&checkpointPath) || checkpointPath[0] == '-';
+        bool sawStandardOption = false;
+        const char* argument = nullptr;
+        while (!invalidArguments && enumerator->TryPopString(&argument))
+        {
+            if (argument[0] == '-')
+            {
+                sawStandardOption = true;
+            }
+            else if (!sawStandardOption)
+            {
+                invalidArguments = true;
+            }
+        }
+        if (invalidArguments)
         {
             std::fprintf(stderr, "native-transaction-proof-result: expected exactly one checkpoint path\n");
             return ExitCode::fail;
