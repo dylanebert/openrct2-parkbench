@@ -209,6 +209,16 @@ execute_process(
     ERROR_QUIET
 )
 
+# The native-transaction proof result carries the full source identity. Keep
+# this separate from the existing short version display definitions.
+execute_process(
+    COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY ${ROOT_DIR}
+    OUTPUT_VARIABLE OPENRCT2_COMMIT_SHA1_FULL
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
 
 if (NOT DISABLE_DISCORD_RPC)
     if (UNIX AND NOT APPLE)
