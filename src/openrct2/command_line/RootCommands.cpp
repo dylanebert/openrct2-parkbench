@@ -144,6 +144,7 @@ namespace OpenRCT2
         DefineCommand("scan-objects", "<path>",             kStandardOptions, HandleCommandScanObjects),
         DefineCommand("handle-uri", "openrct2://.../",      kStandardOptions, HandleCommandUri),
         DefineCommand("trigger-steam-download", "",         kStandardOptions, HandleCommandTriggerSteamDownload),
+        DefineCommand("native-transaction-proof", "",        nullptr,          HandleCommandNativeTransactionProof),
 
     #if defined(_WIN32)
         DefineCommand("register-shell", "", RegisterShellOptions, HandleCommandRegisterShell),
