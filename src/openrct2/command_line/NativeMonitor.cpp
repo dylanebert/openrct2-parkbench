@@ -196,7 +196,10 @@ namespace OpenRCT2::CommandLine
         greeting["schema"] = "park/native-monitor/v1";
         greeting["version"] = kProtocolVersion;
         greeting["maxFrameBytes"] = kMaxFrameBytes;
-        greeting["capabilities"] = json_t{ "ping", "status", "step", "stop" };
+        greeting["capabilities"] = json_t{
+            "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
+            "action.list", "action.describe", "action.query", "action.execute", "save",
+        };
         greeting["engine"] = json_t::object();
         greeting["engine"]["version"] = std::string(gVersionInfoFull);
         greeting["sequence"] = 0;
@@ -257,7 +260,9 @@ namespace OpenRCT2::CommandLine
         }
         request.method = method->get<std::string>();
         if (request.method != "ping" && request.method != "status" && request.method != "step"
-            && request.method != "stop")
+            && request.method != "stop" && request.method != "resource.list" && request.method != "resource.describe"
+            && request.method != "resource.read" && request.method != "action.list" && request.method != "action.describe"
+            && request.method != "action.query" && request.method != "action.execute" && request.method != "save")
         {
             code = "unknown_method";
             message = "monitor method is not advertised";
@@ -265,6 +270,13 @@ namespace OpenRCT2::CommandLine
         }
 
         const auto params = value.find("params");
+        if (params != value.end() && !params->is_object())
+        {
+            code = "invalid_request";
+            message = "request params must be an object";
+            return false;
+        }
+        request.params = params == value.end() ? json_t::object() : *params;
         if (request.method == "step")
         {
             if (params == value.end() || !params->is_object())
@@ -288,12 +300,6 @@ namespace OpenRCT2::CommandLine
                 return false;
             }
             request.ticks = static_cast<uint32_t>(requested);
-        }
-        else if (params != value.end() && !params->is_object())
-        {
-            code = "invalid_request";
-            message = "request params must be an object";
-            return false;
         }
         return true;
     }

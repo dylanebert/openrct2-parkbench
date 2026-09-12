@@ -28,6 +28,7 @@
     #include "Socket.h"
 
     #include <chrono>
+    #include <future>
     #include <cstring>
     #include <iterator>
     #include <memory>

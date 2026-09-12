@@ -251,4 +251,19 @@ namespace OpenRCT2::GameActions
         return false;
     }
 
+    std::vector<GameActionRegistration> GetRegistrations()
+    {
+        std::vector<GameActionRegistration> result;
+        result.reserve(std::size(_registry));
+        for (size_t index = 0; index < std::size(_registry); ++index)
+        {
+            const auto& entry = _registry[index];
+            if (entry.factory != nullptr)
+            {
+                result.push_back({ static_cast<GameCommand>(index), entry.factory, entry.name });
+            }
+        }
+        return result;
+    }
+
 } // namespace OpenRCT2::GameActions

@@ -30,6 +30,7 @@
 #include "audio/AudioContext.h"
 #include "command_line/CommandLine.hpp"
 #include "command_line/NativeMonitor.h"
+#include "command_line/NativeRegistry.h"
 #include "config/Config.h"
 #include "core/Json.hpp"
 #include "core/Console.hpp"
@@ -1093,6 +1094,120 @@ namespace OpenRCT2
                         { "beforeTick", tickBefore },
                         { "afterTick", getGameState().currentTicks },
                     });
+                return;
+            }
+            if (request->method == "resource.list")
+            {
+                json_t resources = json_t::array();
+                for (const auto& descriptor : CommandLine::NativeResources())
+                    resources.push_back(CommandLine::NativeResourceDescriptorJson(descriptor));
+                _nativeMonitor->SendSuccess(request->id, sequence, tickBefore, pausedBefore, { { "resources", resources } });
+                return;
+            }
+            if (request->method == "resource.describe")
+            {
+                const auto name = request->params.value("name", request->params.value("resource", ""));
+                for (const auto& descriptor : CommandLine::NativeResources())
+                {
+                    if (name == descriptor.name)
+                    {
+                        _nativeMonitor->SendSuccess(
+                            request->id, sequence, tickBefore, pausedBefore,
+                            CommandLine::NativeResourceDescriptorJson(descriptor));
+                        return;
+                    }
+                }
+                _nativeMonitor->SendError(
+                    request->id, sequence, tickBefore, pausedBefore, "unknown_resource",
+                    "native resource is not registered", { { "name", name } });
+                return;
+            }
+            if (request->method == "resource.read")
+            {
+                const auto name = request->params.value("name", request->params.value("resource", ""));
+                const auto args = request->params.value("args", json_t::object());
+                const auto dispatch = CommandLine::ReadNativeResource(name, args, getGameState());
+                if (dispatch.ok && (!dispatch.value.is_object() || !dispatch.value.contains("error")))
+                {
+                    _nativeMonitor->SendSuccess(request->id, sequence, tickBefore, pausedBefore, dispatch.value);
+                }
+                else
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code.empty() ? "resource_rejected" : dispatch.code,
+                        dispatch.message.empty() ? "resource read was rejected" : dispatch.message,
+                        dispatch.ok ? dispatch.value : dispatch.detail);
+                }
+                return;
+            }
+            if (request->method == "action.list")
+            {
+                json_t actions = json_t::array();
+                for (const auto& descriptor : CommandLine::NativeActions())
+                    actions.push_back(CommandLine::NativeActionDescriptorJson(descriptor));
+                _nativeMonitor->SendSuccess(request->id, sequence, tickBefore, pausedBefore, { { "actions", actions } });
+                return;
+            }
+            if (request->method == "action.describe")
+            {
+                const auto name = request->params.value("name", request->params.value("action", ""));
+                for (const auto& descriptor : CommandLine::NativeActions())
+                {
+                    if (name == descriptor.name)
+                    {
+                        _nativeMonitor->SendSuccess(
+                            request->id, sequence, tickBefore, pausedBefore,
+                            CommandLine::NativeActionDescriptorJson(descriptor));
+                        return;
+                    }
+                }
+                _nativeMonitor->SendError(
+                    request->id, sequence, tickBefore, pausedBefore, "unknown_action",
+                    "native action is not registered", { { "name", name } });
+                return;
+            }
+            if (request->method == "action.query" || request->method == "action.execute")
+            {
+                if (!pausedBefore)
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, tickBefore, pausedBefore, "paused_required",
+                        "native actions are only accepted at the paused simulation boundary");
+                    return;
+                }
+                const auto name = request->params.value("name", request->params.value("action", ""));
+                const auto args = request->params.value("args", json_t::object());
+                const auto dispatch = request->method == "action.query"
+                    ? CommandLine::QueryNativeAction(name, args, getGameState())
+                    : CommandLine::ExecuteNativeAction(name, args, getGameState());
+                if (dispatch.ok)
+                {
+                    _nativeMonitor->SendSuccess(
+                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                }
+                else
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code,
+                        dispatch.message, dispatch.detail);
+                }
+                return;
+            }
+            if (request->method == "save")
+            {
+                if (!pausedBefore)
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, tickBefore, pausedBefore, "paused_required",
+                        "save is only accepted at the paused simulation boundary");
+                    return;
+                }
+                const auto path = request->params.value("path", "");
+                const auto dispatch = CommandLine::SaveNativeGame(path, getGameState());
+                if (dispatch.ok)
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                else
+                    _nativeMonitor->SendError(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code, dispatch.message, dispatch.detail);
                 return;
             }
             if (request->method == "stop")

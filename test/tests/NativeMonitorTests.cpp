@@ -42,7 +42,10 @@ TEST(NativeMonitorProtocol, FrameBoundsAndGreetingAreBounded)
     EXPECT_EQ(greeting["maxFrameBytes"], NativeMonitor::kMaxFrameBytes);
     EXPECT_EQ(greeting["tick"], 17);
     EXPECT_TRUE(greeting["paused"]);
-    EXPECT_EQ(greeting["capabilities"], json_t({ "ping", "status", "step", "stop" }));
+    EXPECT_EQ(
+        greeting["capabilities"],
+        json_t({ "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
+                 "action.list", "action.describe", "action.query", "action.execute", "save" }));
 }
 
 TEST(NativeMonitorProtocol, RequestSchemaPreservesIdsAndStepZero)
@@ -60,6 +63,7 @@ TEST(NativeMonitorProtocol, RequestSchemaPreservesIdsAndStepZero)
         R"({"type":"request","id":42,"method":"ping","params":{}})", request, code, message));
     EXPECT_EQ(request.id, 42u);
     EXPECT_EQ(request.method, "ping");
+    EXPECT_TRUE(request.params.is_object());
 }
 
 TEST(NativeMonitorClock, PausedZeroStepDoesNotAdvanceAndUnpausedStepRefuses)

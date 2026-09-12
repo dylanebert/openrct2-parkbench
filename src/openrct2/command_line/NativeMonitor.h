@@ -28,6 +28,7 @@ namespace OpenRCT2::CommandLine
         uint64_t id{};
         std::string method;
         uint32_t ticks{};
+        json_t params = json_t::object();
     };
 
     class NativeMonitor final

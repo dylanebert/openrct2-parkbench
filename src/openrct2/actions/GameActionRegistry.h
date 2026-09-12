@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace OpenRCT2
 {
@@ -23,7 +24,15 @@ namespace OpenRCT2::GameActions
 
     using GameActionFactory = GameAction* (*)();
 
+    struct GameActionRegistration
+    {
+        GameCommand command;
+        GameActionFactory factory;
+        const char* name;
+    };
+
     std::optional<GameActionFactory> getFactory(GameCommand command);
+    std::vector<GameActionRegistration> GetRegistrations();
     const char* GetName(GameCommand id);
     bool IsValidId(uint32_t id);
 
