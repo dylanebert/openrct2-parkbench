@@ -1016,6 +1016,17 @@ namespace OpenRCT2
             if (CommandLine::gNativeMonitorFd < 0)
                 return;
 
+            if (gOpenRCT2HeadlessGraphics && _drawingEngine == nullptr)
+            {
+                InitialiseDrawingEngine();
+                if (_drawingEngine == nullptr)
+                {
+                    LOG_ERROR("Unable to initialise the headless graphics drawing engine");
+                    Finish();
+                    return;
+                }
+            }
+
             if (!GameIsPaused())
                 PauseToggle();
             _nativeMonitor = std::make_unique<CommandLine::NativeMonitor>(CommandLine::gNativeMonitorFd);
