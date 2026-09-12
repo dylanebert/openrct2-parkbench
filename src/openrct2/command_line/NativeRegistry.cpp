@@ -4,7 +4,6 @@
 #include "../ReplayManager.h"
 #include "../drawing/IDrawingEngine.h"
 #include "../interface/Screenshot.h"
-#include "../paint/Painter.h"
 #include "../Date.h"
 #include "../Game.h"
 #include "../GameState.h"
@@ -628,19 +627,6 @@ namespace OpenRCT2::CommandLine
         std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
         if (error)
             return Failure("capture_failed", "unable to create the capture destination", { { "path", path } });
-        try
-        {
-            auto* painter = GetContext()->GetPainter();
-            if (painter == nullptr)
-                return Failure("capture_failed", "the headless graphics painter is unavailable", { { "path", path } });
-            drawing->BeginDraw();
-            painter->Paint(*drawing);
-            drawing->EndDraw();
-        }
-        catch (const std::exception& exception)
-        {
-            return Failure("capture_failed", "the drawing engine could not render a frame", { { "path", path }, { "error", exception.what() } });
-        }
         const auto produced = drawing->Screenshot();
         if (produced.empty())
             return Failure("capture_failed", "the drawing engine produced no frame", { { "path", path } });
