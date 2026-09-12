@@ -464,6 +464,7 @@ namespace OpenRCT2::CommandLine
                 ObjectSchema(std::move(visitor.properties), std::move(visitor.required)),
                 { { "x", "map-units" }, { "y", "map-units" }, { "z", "height-units" }, { "cost", "money" } },
                 "engine",
+                json_t::array(),
                 "native",
             });
         }
@@ -480,6 +481,7 @@ namespace OpenRCT2::CommandLine
             { "units", descriptor.units },
             { "authority", descriptor.authority },
             { "classification", "effect" },
+            { "inputs", descriptor.inputs },
             { "capability", descriptor.capability },
             { "policy", { { "flags", "native-controlled" } } },
         };

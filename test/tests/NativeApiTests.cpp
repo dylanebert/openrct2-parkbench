@@ -64,7 +64,9 @@ TEST(NativeApiRegistry, ActionDescriptorsComeFromNativeActionRegistrations)
         EXPECT_TRUE(descriptor.units.is_object());
         EXPECT_EQ(descriptor.authority, "engine");
         EXPECT_EQ(descriptor.capability, "native");
-        EXPECT_TRUE(NativeActionDescriptorJson(descriptor).contains("policy"));
+        const auto json = NativeActionDescriptorJson(descriptor);
+        EXPECT_TRUE(json.contains("inputs"));
+        EXPECT_TRUE(json.contains("policy"));
     }
 }
 

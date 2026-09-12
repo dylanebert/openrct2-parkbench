@@ -34,6 +34,7 @@ namespace OpenRCT2
             json_t schema;
             json_t units;
             const char* authority;
+            json_t inputs;
             const char* capability;
         };
 
