@@ -139,11 +139,14 @@ namespace OpenRCT2::CommandLine
             // a reader blocked in read before the descriptor is closed.
             shutdown(_descriptor, SHUT_RDWR);
 #endif
-            CloseDescriptor(_descriptor);
-            _descriptor = -1;
         }
         if (_reader.joinable())
             _reader.join();
+        if (_descriptor >= 0)
+        {
+            CloseDescriptor(_descriptor);
+            _descriptor = -1;
+        }
     }
 
     bool NativeMonitor::Start(uint32_t tick, bool paused)
