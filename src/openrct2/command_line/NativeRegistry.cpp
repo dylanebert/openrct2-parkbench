@@ -628,6 +628,9 @@ namespace OpenRCT2::CommandLine
 
         const auto screenshotRoot = std::filesystem::path(
             GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user, DirId::screenshots));
+        std::filesystem::create_directories(screenshotRoot, error);
+        if (error)
+            return Failure("capture_failed", "unable to create the native screenshot directory", { { "path", path }, { "error", error.message() } });
         const auto temporaryName = std::string("parkbench-frame-") + std::to_string(getGameState().currentTicks) + ".png";
         const auto temporary = screenshotRoot / temporaryName;
         std::filesystem::remove(temporary, error);
