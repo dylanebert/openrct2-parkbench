@@ -154,10 +154,6 @@ namespace OpenRCT2
         DefineCommand("scan-objects", "<path>",             kStandardOptions, HandleCommandScanObjects),
         DefineCommand("handle-uri", "openrct2://.../",      kStandardOptions, HandleCommandUri),
         DefineCommand("trigger-steam-download", "",         kStandardOptions, HandleCommandTriggerSteamDownload),
-        DefineCommand("native-transaction-proof", "",        nullptr,          HandleCommandNativeTransactionProof),
-        DefineCommand("native-transaction-proof-result", "<checkpoint>", kStandardOptions,
-                      HandleCommandNativeTransactionProofResult),
-
     #if defined(_WIN32)
         DefineCommand("register-shell", "", RegisterShellOptions, HandleCommandRegisterShell),
     #endif
@@ -533,7 +529,3 @@ namespace OpenRCT2
         return ExitCode::ok;
     }
 } // namespace OpenRCT2
-
-// Keep the proof linked into the legacy Visual Studio targets, whose project
-// files predate the proof source. CMake removes the standalone source above.
-#include "NativeTransactionProof.cpp"

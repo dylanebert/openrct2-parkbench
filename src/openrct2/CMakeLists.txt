@@ -1,7 +1,4 @@
 file(GLOB_RECURSE OPENRCT2_CORE_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp")
-# NativeTransactionProof.cpp is included by the existing RootCommands.cpp
-# translation unit so the legacy Visual Studio targets build the proof too.
-list(REMOVE_ITEM OPENRCT2_CORE_SOURCES "${CMAKE_CURRENT_LIST_DIR}/command_line/NativeTransactionProof.cpp")
 file(GLOB_RECURSE OPENRCT2_CORE_HEADERS "${CMAKE_CURRENT_LIST_DIR}/*.h"
         "${CMAKE_CURRENT_LIST_DIR}/*.hpp")
 
@@ -277,7 +274,6 @@ endif()
 
 if (NOT OPENRCT2_COMMIT_SHA1_FULL STREQUAL "")
     set_source_files_properties(
-        ${CMAKE_CURRENT_LIST_DIR}/command_line/NativeTransactionProof.cpp
         ${CMAKE_CURRENT_LIST_DIR}/command_line/RootCommands.cpp
         PROPERTIES COMPILE_DEFINITIONS OPENRCT2_COMMIT_SHA1_FULL="${OPENRCT2_COMMIT_SHA1_FULL}")
 endif()

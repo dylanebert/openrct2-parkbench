@@ -1383,15 +1383,6 @@ namespace OpenRCT2
             }
 
             _sceneManager->setActiveScene(nextScene);
-            if (CommandLine::gNativeTransactionProofResult)
-            {
-                if (nextScene == _sceneManager->getGameScene())
-                {
-                    CommandLine::RunNativeTransactionProofResult(gOpenRCT2StartupActionPath);
-                }
-                Finish();
-                return;
-            }
             InitNetworkGame(nextScene == _sceneManager->getGameScene());
             if (nextScene == _sceneManager->getGameScene())
                 StartNativeMonitor();
@@ -1467,10 +1458,6 @@ namespace OpenRCT2
             else
             {
                 SwitchToStartUpScene();
-            }
-            if (CommandLine::gNativeTransactionProofResult)
-            {
-                return;
             }
 #ifdef __EMSCRIPTEN__
             emscripten_set_main_loop_arg(

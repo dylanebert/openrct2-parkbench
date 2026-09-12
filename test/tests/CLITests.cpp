@@ -82,39 +82,6 @@ TEST_F(CommandLineTests, command_line_for_sprite_build)
     ASSERT_TRUE(CompareSpriteFiles(ExampleSpriteFilePath(), outputfilePath));
 }
 
-TEST_F(CommandLineTests, native_transaction_result_accepts_checkpoint_and_standard_options)
-{
-    const char* checkpoint = "checkpoint.park";
-    const char* userData = "native-transaction-test-userdata";
-    const char* argv[] = {
-        "openrct2-cli", "native-transaction-proof-result", checkpoint, "--user-data-path", userData,
-    };
-
-    ASSERT_EQ(CommandLineRun(argv, static_cast<int32_t>(std::size(argv))), ExitCode::launch);
-    ASSERT_EQ(gOpenRCT2StartupAction, StartupAction::open);
-    ASSERT_STREQ(gOpenRCT2StartupActionPath, checkpoint);
-    ASSERT_EQ(gCustomUserDataPath, Path::GetAbsolute(userData));
-}
-
-TEST_F(CommandLineTests, native_transaction_result_rejects_missing_checkpoint)
-{
-    const char* argv[] = {
-        "openrct2-cli", "native-transaction-proof-result", "--user-data-path", "native-transaction-test-userdata",
-    };
-
-    ASSERT_EQ(CommandLineRun(argv, static_cast<int32_t>(std::size(argv))), ExitCode::fail);
-}
-
-TEST_F(CommandLineTests, native_transaction_result_rejects_second_checkpoint)
-{
-    const char* argv[] = {
-        "openrct2-cli", "native-transaction-proof-result", "checkpoint.park", "second-checkpoint.park",
-        "--user-data-path", "native-transaction-test-userdata",
-    };
-
-    ASSERT_EQ(CommandLineRun(argv, static_cast<int32_t>(std::size(argv))), ExitCode::fail);
-}
-
 TEST_F(CommandLineTests, command_line_for_sprite_failed_build)
 {
     // run on correct manifest file

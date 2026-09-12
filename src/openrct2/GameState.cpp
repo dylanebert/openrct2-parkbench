@@ -239,45 +239,6 @@ namespace OpenRCT2
         gDoSingleUpdate = false;
     }
 
-    bool gameStateAdvancePausedNativeTransaction(
-        uint32_t updates, NativeTransactionProofState& state, NativeTransactionStep step)
-    {
-        if (!state.paused || step == nullptr)
-            return false;
-
-        for (uint32_t i = 0; i < updates; i++)
-        {
-            if (!state.paused)
-                return false;
-
-            const auto ticksBefore = state.currentTicks;
-            if (!step(state) || !state.paused || state.currentTicks != ticksBefore + 1)
-                return false;
-        }
-        return true;
-    }
-
-    namespace
-    {
-        bool advanceNativeTransactionStep(NativeTransactionProofState& state)
-        {
-            if (GameIsNotPaused())
-                return false;
-
-            gDoSingleUpdate = true;
-            gameStateTick();
-            state.paused = GameIsPaused();
-            state.currentTicks = getGameState().currentTicks;
-            return true;
-        }
-    } // namespace
-
-    bool gameStateAdvancePausedNativeTransaction(uint32_t updates)
-    {
-        NativeTransactionProofState state{ GameIsPaused(), getGameState().currentTicks };
-        return gameStateAdvancePausedNativeTransaction(updates, state, advanceNativeTransactionStep);
-    }
-
     bool gameStateAdvancePausedNativeMonitor(uint32_t updates)
     {
         if (!GameIsPaused() || updates > std::numeric_limits<uint32_t>::max() - getGameState().currentTicks)
