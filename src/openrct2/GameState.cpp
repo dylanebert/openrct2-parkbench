@@ -35,6 +35,8 @@
 #include "world/Park.h"
 #include "world/Scenery.h"
 
+#include <limits>
+
 using namespace OpenRCT2::Scripting;
 
 namespace OpenRCT2
@@ -274,6 +276,22 @@ namespace OpenRCT2
     {
         NativeTransactionProofState state{ GameIsPaused(), getGameState().currentTicks };
         return gameStateAdvancePausedNativeTransaction(updates, state, advanceNativeTransactionStep);
+    }
+
+    bool gameStateAdvancePausedNativeMonitor(uint32_t updates)
+    {
+        if (!GameIsPaused() || updates > std::numeric_limits<uint32_t>::max() - getGameState().currentTicks)
+            return false;
+
+        for (uint32_t i = 0; i < updates; i++)
+        {
+            const auto ticksBefore = getGameState().currentTicks;
+            gDoSingleUpdate = true;
+            gameStateTick();
+            if (!GameIsPaused() || getGameState().currentTicks != ticksBefore + 1)
+                return false;
+        }
+        return true;
     }
 
     static void gameStateCreateStateSnapshot()

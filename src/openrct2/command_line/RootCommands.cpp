@@ -53,6 +53,7 @@ namespace OpenRCT2
     // The fork's --headless-graphics switch, published for openrct2-cli's
     // entry point (declared in CommandLine.hpp).
     bool gOpenRCT2HeadlessGraphics = false;
+    int32_t CommandLine::gNativeMonitorFd = -1;
     static bool _help = false;
     static bool _version = false;
     static bool _noInstall = false;
@@ -63,6 +64,7 @@ namespace OpenRCT2
     static bool _noThrottle = false;
     static bool _headlessGraphics = false;
     static bool _silentReplays = false;
+    static int32_t _nativeMonitorFd = -1;
     static u8string _password = {};
     static u8string _userDataPath = {};
     static u8string _openrct2DataPath = {};
@@ -81,6 +83,7 @@ namespace OpenRCT2
         { CMDLINE_TYPE_SWITCH,  &_verbose,          kNAC, "verbose",            "log verbose messages"                                       },
         { CMDLINE_TYPE_SWITCH,  &_headless,         kNAC, "headless",           "run " OPENRCT2_NAME " headless" IMPLIES_SILENT_BREAKPAD     },
         { CMDLINE_TYPE_SWITCH,  &_noThrottle,       kNAC, "no-throttle",        "headless only: skip the fixed-frame real-time sleep while unpaused (default off)" },
+        { CMDLINE_TYPE_INTEGER, &_nativeMonitorFd,   kNAC, "native-monitor-fd", "private native monitor descriptor (opt-in, default off)" },
         { CMDLINE_TYPE_SWITCH,  &_headlessGraphics, kNAC, "headless-graphics",  "headless only: load base graphics so captureImage can render (default off)" },
         { CMDLINE_TYPE_SWITCH,  &_silentReplays,    kNAC, "silent-replays",     "use unobtrusive replays"                                    },
     #ifndef DISABLE_NETWORK
@@ -213,6 +216,7 @@ namespace OpenRCT2
         gOpenRCT2NoGraphics = _headless && !_headlessGraphics;
         gOpenRCT2HeadlessGraphics = _headlessGraphics;
         gOpenRCT2NoThrottle = _noThrottle;
+        CommandLine::gNativeMonitorFd = _nativeMonitorFd;
         gOpenRCT2SilentBreakpad = _silentBreakpad || _headless;
 
         if (!_userDataPath.empty())

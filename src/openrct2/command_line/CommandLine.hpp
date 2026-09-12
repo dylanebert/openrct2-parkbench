@@ -132,5 +132,6 @@ namespace OpenRCT2
         ExitCode HandleCommandNativeTransactionProofResult(CommandLineArgEnumerator* enumerator);
         bool RunNativeTransactionProofResult(const char* checkpointPath);
         extern bool gNativeTransactionProofResult;
+        extern int32_t gNativeMonitorFd;
     } // namespace CommandLine
 } // namespace OpenRCT2

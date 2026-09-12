@@ -29,7 +29,9 @@
 #include "audio/Audio.h"
 #include "audio/AudioContext.h"
 #include "command_line/CommandLine.hpp"
+#include "command_line/NativeMonitor.h"
 #include "config/Config.h"
+#include "core/Json.hpp"
 #include "core/Console.hpp"
 #include "core/File.h"
 #include "core/FileScanner.h"
@@ -156,6 +158,8 @@ namespace OpenRCT2
         Timer _forcedUpdateTimer;
 
         BackgroundWorker _backgroundWorker;
+        std::unique_ptr<CommandLine::NativeMonitor> _nativeMonitor;
+        uint64_t _nativeMonitorSequence = 0;
 
     public:
         // Singleton of Context.
@@ -190,6 +194,8 @@ namespace OpenRCT2
 
         ~Context() override
         {
+            _nativeMonitor.reset();
+
             // NOTE: We must shutdown all systems here before Instance is set back to null.
             //       If objects use GetContext() in their destructor things won't go well.
 
@@ -1004,6 +1010,106 @@ namespace OpenRCT2
             return true;
         }
 
+        void StartNativeMonitor()
+        {
+            if (CommandLine::gNativeMonitorFd < 0)
+                return;
+
+            if (!GameIsPaused())
+                PauseToggle();
+            _nativeMonitor = std::make_unique<CommandLine::NativeMonitor>(CommandLine::gNativeMonitorFd);
+            if (!_nativeMonitor->Start(getGameState().currentTicks, GameIsPaused()))
+            {
+                LOG_ERROR("Unable to start the private native monitor");
+                _nativeMonitor.reset();
+                Finish();
+            }
+        }
+
+        void ProcessNativeMonitor()
+        {
+            if (_nativeMonitor == nullptr)
+                return;
+            if (_nativeMonitor->Lost())
+            {
+                // The monitor is the child lifetime boundary. This runs on the
+                // simulation thread, so EOF cannot leave a live engine behind.
+                Finish();
+                return;
+            }
+
+            const auto request = _nativeMonitor->TakeRequest();
+            if (!request.has_value())
+                return;
+
+            const auto sequence = ++_nativeMonitorSequence;
+            const auto tickBefore = getGameState().currentTicks;
+            const auto pausedBefore = GameIsPaused();
+            if (request->method == "ping")
+            {
+                _nativeMonitor->SendSuccess(
+                    request->id, sequence, tickBefore, pausedBefore,
+                    json_t{ { "pong", true } });
+                return;
+            }
+            if (request->method == "status")
+            {
+                _nativeMonitor->SendSuccess(
+                    request->id, sequence, tickBefore, pausedBefore,
+                    json_t{
+                        { "monitor", "native" },
+                        { "engineTick", tickBefore },
+                        { "paused", pausedBefore },
+                    });
+                return;
+            }
+            if (request->method == "step")
+            {
+                if (!pausedBefore)
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, tickBefore, pausedBefore, "paused_required",
+                        "step is only accepted while the engine is paused",
+                        json_t{ { "requested", request->ticks } });
+                    return;
+                }
+                if (!gameStateAdvancePausedNativeMonitor(request->ticks))
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), "step_rejected",
+                        "the engine did not reach the exact requested tick count",
+                        json_t{
+                            { "requested", request->ticks },
+                            { "beforeTick", tickBefore },
+                            { "afterTick", getGameState().currentTicks },
+                        });
+                    return;
+                }
+                _nativeMonitor->SendSuccess(
+                    request->id, sequence, getGameState().currentTicks, GameIsPaused(),
+                    json_t{
+                        { "requested", request->ticks },
+                        { "advanced", request->ticks },
+                        { "beforeTick", tickBefore },
+                        { "afterTick", getGameState().currentTicks },
+                    });
+                return;
+            }
+            if (request->method == "stop")
+            {
+                const bool sent = _nativeMonitor->SendSuccess(
+                    request->id, sequence, tickBefore, pausedBefore,
+                    json_t{ { "stopped", true } });
+                if (sent)
+                    Finish();
+                return;
+            }
+
+            _nativeMonitor->SendError(
+                request->id, sequence, tickBefore, pausedBefore, "unknown_method",
+                "monitor method is not advertised");
+        }
+
         void SwitchToStartUpScene()
         {
             if (gOpenRCT2Headless)
@@ -1120,6 +1226,8 @@ namespace OpenRCT2
                 return;
             }
             InitNetworkGame(nextScene == _sceneManager->getGameScene());
+            if (nextScene == _sceneManager->getGameScene())
+                StartNativeMonitor();
         }
 
         void InitNetworkGame(bool isGameScene)
@@ -1309,6 +1417,7 @@ namespace OpenRCT2
             PROFILED_FUNCTION();
 
             _uiContext->ProcessMessages();
+            ProcessNativeMonitor();
 
             // park-fork pacing patch (F1): --no-throttle forces the accumulator to exactly
             // one tick's worth so the while loop below runs exactly one Tick() per

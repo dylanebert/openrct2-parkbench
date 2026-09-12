@@ -130,6 +130,12 @@ namespace OpenRCT2
      */
     bool gameStateAdvancePausedNativeTransaction(uint32_t updates);
 
+    /**
+     * Advance a monitor-owned paused game exactly once per requested tick.
+     * Unlike the retired proof helper, this is the production monitor seam.
+     */
+    bool gameStateAdvancePausedNativeMonitor(uint32_t updates);
+
     void gameStateUpdateLogic();
 
 } // namespace OpenRCT2
