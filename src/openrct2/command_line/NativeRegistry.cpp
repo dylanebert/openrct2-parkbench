@@ -1,8 +1,8 @@
 #include "NativeRegistry.h"
 
 #include "../Context.h"
+#include "../PlatformEnvironment.h"
 #include "../ReplayManager.h"
-#include "../drawing/IDrawingEngine.h"
 #include "../interface/Screenshot.h"
 #include "../Date.h"
 #include "../Game.h"
@@ -620,17 +620,33 @@ namespace OpenRCT2::CommandLine
     {
         if (!NativePathContained(NativeCaptureRoot(), path))
             return Failure("capture_containment", "capture path must remain below the owned capture root");
-        auto* drawing = GetContext()->GetDrawingEngine();
-        if (drawing == nullptr)
-            return Failure("rendering_unavailable", "the admitted rendering engine is unavailable");
         std::error_code error;
-        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
+        const auto destination = std::filesystem::path(path);
+        std::filesystem::create_directories(destination.parent_path(), error);
         if (error)
             return Failure("capture_failed", "unable to create the capture destination", { { "path", path } });
-        const auto produced = drawing->Screenshot();
-        if (produced.empty())
-            return Failure("capture_failed", "the drawing engine produced no frame", { { "path", path } });
-        std::filesystem::rename(std::filesystem::path(produced), std::filesystem::path(path), error);
+
+        const auto screenshotRoot = std::filesystem::path(
+            GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user, DirId::screenshots));
+        const auto temporaryName = std::string("parkbench-frame-") + std::to_string(getGameState().currentTicks) + ".png";
+        const auto temporary = screenshotRoot / temporaryName;
+        std::filesystem::remove(temporary, error);
+        try
+        {
+            CaptureOptions options;
+            options.Filename = temporaryName;
+            options.View = CaptureView{ 640, 480, CoordsXY{ getGameState().mapSize.x * 16, getGameState().mapSize.y * 16 } };
+            options.Zoom = ZoomLevel(0);
+            options.Rotation = 0;
+            CaptureImage(options);
+        }
+        catch (const std::exception& exception)
+        {
+            return Failure("capture_failed", "the native renderer could not capture a frame", { { "path", path }, { "error", exception.what() } });
+        }
+        if (!std::filesystem::is_regular_file(temporary, error) || error)
+            return Failure("capture_failed", "the native renderer produced no frame", { { "path", path } });
+        std::filesystem::rename(temporary, destination, error);
         if (error)
             return Failure("capture_failed", "unable to retain the rendered frame", { { "path", path }, { "error", error.message() } });
         return Success({ { "status", "captured" }, { "path", path }, { "tick", getGameState().currentTicks } });
