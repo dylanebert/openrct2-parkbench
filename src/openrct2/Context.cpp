@@ -1238,7 +1238,8 @@ namespace OpenRCT2
             if (request->method == "capture")
             {
                 const auto path = request->params.value("path", "");
-                const auto dispatch = CommandLine::CaptureNativeFrame(path);
+                const auto view = request->params.value("view", json_t(nullptr));
+                const auto dispatch = CommandLine::CaptureNativeFrame(path, view);
                 if (dispatch.ok)
                     _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
                 else

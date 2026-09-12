@@ -70,6 +70,74 @@ TEST(NativeApiRegistry, ActionDescriptorsComeFromNativeActionRegistrations)
     }
 }
 
+TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedValues)
+{
+    const auto valid = ValidateNativeCaptureView(
+        json_t{
+            { "width", 640 },
+            { "height", 480 },
+            { "center", { { "x", 3632 }, { "y", 400 } } },
+            { "zoom", 0 },
+            { "rotation", 0 },
+        },
+        150,
+        150);
+    EXPECT_TRUE(valid.ok);
+    EXPECT_EQ(ValidateNativeCaptureView(json_t::object(), 150, 150).code, "capture_view_invalid");
+    EXPECT_EQ(
+        ValidateNativeCaptureView(
+            json_t{
+                { "width", 0 },
+                { "height", 480 },
+                { "center", { { "x", 3632 }, { "y", 400 } } },
+                { "zoom", 0 },
+                { "rotation", 0 },
+            },
+            150,
+            150)
+            .code,
+        "capture_view_dimensions");
+    EXPECT_EQ(
+        ValidateNativeCaptureView(
+            json_t{
+                { "width", 640 },
+                { "height", 480 },
+                { "center", { { "x", 0 }, { "y", 400 } } },
+                { "zoom", 0 },
+                { "rotation", 0 },
+            },
+            150,
+            150)
+            .code,
+        "capture_view_center");
+    EXPECT_EQ(
+        ValidateNativeCaptureView(
+            json_t{
+                { "width", 640 },
+                { "height", 480 },
+                { "center", { { "x", 3632 }, { "y", 400 } } },
+                { "zoom", 4 },
+                { "rotation", 0 },
+            },
+            150,
+            150)
+            .code,
+        "capture_view_zoom");
+    EXPECT_EQ(
+        ValidateNativeCaptureView(
+            json_t{
+                { "width", 640 },
+                { "height", 480 },
+                { "center", { { "x", 3632 }, { "y", 400 } } },
+                { "zoom", 0 },
+                { "rotation", 4 },
+            },
+            150,
+            150)
+            .code,
+        "capture_view_rotation");
+}
+
 TEST(NativeApiPolicy, UniversalFlagsAreNotCallerControlledAndSavePathsAreContained)
 {
     EXPECT_TRUE(NativePathContained("/tmp/parkbench-owned", "/tmp/parkbench-owned/save.park"));

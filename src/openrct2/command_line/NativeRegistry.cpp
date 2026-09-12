@@ -18,6 +18,7 @@
 #include "../park/ParkFile.h"
 #include "../scenario/Scenario.h"
 #include "../world/Map.h"
+#include "../world/tile_element/PathElement.h"
 #include "../world/tile_element/SurfaceElement.h"
 
 #include <algorithm>
@@ -382,7 +383,10 @@ namespace OpenRCT2::CommandLine
             auto* surface = MapGetSurfaceElementAt(TileCoordsXY{ x, y });
             if (surface == nullptr)
                 return { { "error", "tile is outside the map" }, { "x", x }, { "y", y } };
-            return {
+            if (args.contains("includePath") && !args["includePath"].is_boolean())
+                return { { "error", "includePath must be a boolean" } };
+
+            json_t result = {
                 { "x", x },
                 { "y", y },
                 { "slope", surface->GetSlope() },
@@ -392,6 +396,32 @@ namespace OpenRCT2::CommandLine
                 { "surfaceObject", surface->GetSurfaceObjectIndex() },
                 { "edgeObject", surface->GetEdgeObjectIndex() },
             };
+            if (args.value("includePath", false))
+            {
+                json_t path = { { "present", false } };
+                auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                while (element != nullptr)
+                {
+                    if (const auto* pathElement = element->asPath())
+                    {
+                        path = {
+                            { "present", true },
+                            { "baseZ", pathElement->getBaseZ() },
+                            { "clearanceZ", pathElement->getClearanceZ() },
+                            { "surfaceObject", pathElement->GetSurfaceEntryIndex() },
+                            { "railingsObject", pathElement->GetRailingsEntryIndex() },
+                            { "queue", pathElement->IsQueue() },
+                            { "edges", pathElement->GetEdges() },
+                        };
+                        break;
+                    }
+                    if (element->isLastForTile())
+                        break;
+                    ++element;
+                }
+                result["path"] = std::move(path);
+            }
+            return result;
         }
 
         json_t ReadRegion(const json_t&, GameState_t& state)
@@ -428,7 +458,7 @@ namespace OpenRCT2::CommandLine
                 { { "id", "entity" }, { "x", "map-units" } }, "engine", json_t::array(), "native", ReadGuest },
             { "objects", "Authoritative loaded object identities.", EmptySchema(), { { "count", "objects" } },
                 "engine", json_t::array(), "native", ReadObjects },
-            { "tile", "Authoritative surface state at a map tile.", ObjectSchema({ { "x", { { "type", "integer" } } }, { "y", { { "type", "integer" } } } }, { "x", "y" }),
+            { "tile", "Authoritative surface and optional path state at a map tile.", ObjectSchema({ { "x", { { "type", "integer" } } }, { "y", { { "type", "integer" } } }, { "includePath", { { "type", "boolean" } } } }, { "x", "y" }),
                 { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" } }, "engine", json_t::array(), "native", ReadTile },
             { "region", "Derived map-boundary projection from mapSize.", EmptySchema(), { { "mapWidth", "map-units" }, { "mapHeight", "map-units" } },
                 "derived", { "mapSize" }, "native", ReadRegion },
@@ -616,10 +646,66 @@ namespace OpenRCT2::CommandLine
         return Success({ { "status", "final" }, { "path", info.FilePath }, { "tick", getGameState().currentTicks } });
     }
 
-    NativeDispatchResult CaptureNativeFrame(std::string_view path)
+    NativeDispatchResult ValidateNativeCaptureView(const json_t& view, int32_t mapWidth, int32_t mapHeight)
+    {
+        if (!view.is_object())
+            return Failure("capture_view_invalid", "capture view must be a JSON object");
+        const auto required = { "width", "height", "center", "zoom", "rotation" };
+        for (const auto* key : required)
+        {
+            if (!view.contains(key))
+                return Failure("capture_view_invalid", "capture view is missing a required field", { { "field", key } });
+        }
+        if (view.size() != 5 || !view["center"].is_object() || view["center"].size() != 2
+            || !view["center"].contains("x") || !view["center"].contains("y"))
+            return Failure("capture_view_invalid", "capture view has an invalid center object");
+        const auto& center = view["center"];
+        if (!view["width"].is_number_integer() || !view["height"].is_number_integer()
+            || !center["x"].is_number_integer() || !center["y"].is_number_integer()
+            || !view["zoom"].is_number_integer() || !view["rotation"].is_number_integer())
+            return Failure("capture_view_invalid", "capture view fields must be integers");
+        const auto width = view["width"].get<int64_t>();
+        const auto height = view["height"].get<int64_t>();
+        const auto x = center["x"].get<int64_t>();
+        const auto y = center["y"].get<int64_t>();
+        const auto zoom = view["zoom"].get<int64_t>();
+        const auto rotation = view["rotation"].get<int64_t>();
+        if (width < 1 || width > 1920 || height < 1 || height > 1080
+            || width * height > 2'073'600)
+            return Failure("capture_view_dimensions", "capture view dimensions exceed the bounded pixel limits");
+        const auto maxX = static_cast<int64_t>(mapWidth) * 32;
+        const auto maxY = static_cast<int64_t>(mapHeight) * 32;
+        if (x < 16 || x > maxX - 16 || y < 16 || y > maxY - 16)
+            return Failure("capture_view_center", "capture view center must remain inside the map");
+        if (zoom < 0 || zoom > 3)
+            return Failure("capture_view_zoom", "capture view zoom is not supported");
+        if (rotation < 0 || rotation > 3)
+            return Failure("capture_view_rotation", "capture view rotation is not supported");
+        return Success({
+            { "width", width },
+            { "height", height },
+            { "center", { { "x", x }, { "y", y } } },
+            { "zoom", zoom },
+            { "rotation", rotation },
+        });
+    }
+
+    NativeDispatchResult ValidateNativeCaptureView(const json_t& view, const GameState_t& state)
+    {
+        return ValidateNativeCaptureView(view, state.mapSize.x, state.mapSize.y);
+    }
+
+    NativeDispatchResult CaptureNativeFrame(std::string_view path, const json_t& view)
     {
         if (!NativePathContained(NativeCaptureRoot(), path))
             return Failure("capture_containment", "capture path must remain below the owned capture root");
+        const bool explicitView = !view.is_null();
+        if (explicitView)
+        {
+            const auto validation = ValidateNativeCaptureView(view, getGameState());
+            if (!validation.ok)
+                return validation;
+        }
         std::error_code error;
         const auto destination = std::filesystem::path(path);
         std::filesystem::create_directories(destination.parent_path(), error);
@@ -638,9 +724,23 @@ namespace OpenRCT2::CommandLine
         {
             CaptureOptions options;
             options.Filename = temporaryName;
-            options.View = CaptureView{ 640, 480, CoordsXY{ getGameState().mapSize.x * 16, getGameState().mapSize.y * 16 } };
-            options.Zoom = ZoomLevel(0);
-            options.Rotation = 0;
+            const auto& state = getGameState();
+            const auto selected = explicitView
+                ? view
+                : json_t{
+                    { "width", 640 },
+                    { "height", 480 },
+                    { "center", { { "x", state.mapSize.x * 16 }, { "y", state.mapSize.y * 16 } } },
+                    { "zoom", 0 },
+                    { "rotation", 0 },
+                };
+            options.View = CaptureView{
+                selected["width"].get<int32_t>(),
+                selected["height"].get<int32_t>(),
+                CoordsXY{ selected["center"]["x"].get<int32_t>(), selected["center"]["y"].get<int32_t>() },
+            };
+            options.Zoom = ZoomLevel(selected["zoom"].get<int8_t>());
+            options.Rotation = selected["rotation"].get<uint8_t>();
             CaptureImage(options);
         }
         catch (const std::exception& exception)
@@ -652,6 +752,16 @@ namespace OpenRCT2::CommandLine
         std::filesystem::rename(temporary, destination, error);
         if (error)
             return Failure("capture_failed", "unable to retain the rendered frame", { { "path", path }, { "error", error.message() } });
-        return Success({ { "status", "captured" }, { "path", path }, { "tick", getGameState().currentTicks } });
+        const auto& state = getGameState();
+        const auto capturedView = explicitView
+            ? view
+            : json_t{
+                { "width", 640 },
+                { "height", 480 },
+                { "center", { { "x", state.mapSize.x * 16 }, { "y", state.mapSize.y * 16 } } },
+                { "zoom", 0 },
+                { "rotation", 0 },
+            };
+        return Success({ { "status", "captured" }, { "path", path }, { "tick", state.currentTicks }, { "view", capturedView } });
     }
 }
