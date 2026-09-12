@@ -67,6 +67,8 @@ namespace OpenRCT2
     static bool _silentReplays = false;
     static int32_t _nativeMonitorFd = -1;
     static u8string _nativeMonitorSaveRoot = {};
+    static u8string _nativeMonitorRecordingRoot = {};
+    static u8string _nativeMonitorCaptureRoot = {};
     static u8string _password = {};
     static u8string _userDataPath = {};
     static u8string _openrct2DataPath = {};
@@ -87,6 +89,8 @@ namespace OpenRCT2
         { CMDLINE_TYPE_SWITCH,  &_noThrottle,       kNAC, "no-throttle",        "headless only: skip the fixed-frame real-time sleep while unpaused (default off)" },
         { CMDLINE_TYPE_INTEGER, &_nativeMonitorFd,   kNAC, "native-monitor-fd", "private native monitor descriptor (opt-in, default off)" },
         { CMDLINE_TYPE_STRING,  &_nativeMonitorSaveRoot, kNAC, "native-monitor-save-root", "private native save containment root" },
+        { CMDLINE_TYPE_STRING,  &_nativeMonitorRecordingRoot, kNAC, "native-monitor-recording-root", "private native recording containment root" },
+        { CMDLINE_TYPE_STRING,  &_nativeMonitorCaptureRoot, kNAC, "native-monitor-capture-root", "private native capture containment root" },
         { CMDLINE_TYPE_SWITCH,  &_headlessGraphics, kNAC, "headless-graphics",  "headless only: load base graphics so captureImage can render (default off)" },
         { CMDLINE_TYPE_SWITCH,  &_silentReplays,    kNAC, "silent-replays",     "use unobtrusive replays"                                    },
     #ifndef DISABLE_NETWORK
@@ -221,6 +225,8 @@ namespace OpenRCT2
         gOpenRCT2NoThrottle = _noThrottle;
         CommandLine::gNativeMonitorFd = _nativeMonitorFd;
         CommandLine::SetNativeSaveRoot(_nativeMonitorSaveRoot);
+        CommandLine::SetNativeRecordingRoot(_nativeMonitorRecordingRoot);
+        CommandLine::SetNativeCaptureRoot(_nativeMonitorCaptureRoot);
         gOpenRCT2SilentBreakpad = _silentBreakpad || _headless;
 
         if (!_userDataPath.empty())

@@ -199,6 +199,7 @@ namespace OpenRCT2::CommandLine
         greeting["capabilities"] = json_t{
             "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
             "action.list", "action.describe", "action.query", "action.execute", "save",
+            "record.start", "record.status", "record.stop", "capture",
         };
         greeting["engine"] = json_t::object();
         greeting["engine"]["version"] = std::string(gVersionInfoFull);
@@ -262,7 +263,9 @@ namespace OpenRCT2::CommandLine
         if (request.method != "ping" && request.method != "status" && request.method != "step"
             && request.method != "stop" && request.method != "resource.list" && request.method != "resource.describe"
             && request.method != "resource.read" && request.method != "action.list" && request.method != "action.describe"
-            && request.method != "action.query" && request.method != "action.execute" && request.method != "save")
+            && request.method != "action.query" && request.method != "action.execute" && request.method != "save"
+            && request.method != "record.start" && request.method != "record.status" && request.method != "record.stop"
+            && request.method != "capture")
         {
             code = "unknown_method";
             message = "monitor method is not advertised";

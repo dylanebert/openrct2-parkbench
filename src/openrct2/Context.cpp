@@ -1193,6 +1193,47 @@ namespace OpenRCT2
                 }
                 return;
             }
+            if (request->method == "record.start")
+            {
+                const auto path = request->params.value("path", "");
+                const auto dispatch = CommandLine::StartNativeRecording(path);
+                if (dispatch.ok)
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                else
+                    _nativeMonitor->SendError(request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
+                return;
+            }
+            if (request->method == "record.status")
+            {
+                auto* replay = GetContext()->GetReplayManager();
+                ReplayRecordInfo info{};
+                const bool active = replay != nullptr && replay->IsRecording();
+                if (active)
+                    replay->GetCurrentReplayInfo(info);
+                _nativeMonitor->SendSuccess(
+                    request->id, sequence, tickBefore, pausedBefore,
+                    json_t{ { "status", active ? "active" : "inactive" }, { "path", active ? info.FilePath : "" }, { "tick", tickBefore } });
+                return;
+            }
+            if (request->method == "record.stop")
+            {
+                const auto dispatch = CommandLine::StopNativeRecording();
+                if (dispatch.ok)
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                else
+                    _nativeMonitor->SendError(request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
+                return;
+            }
+            if (request->method == "capture")
+            {
+                const auto path = request->params.value("path", "");
+                const auto dispatch = CommandLine::CaptureNativeFrame(path);
+                if (dispatch.ok)
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                else
+                    _nativeMonitor->SendError(request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
+                return;
+            }
             if (request->method == "save")
             {
                 if (!pausedBefore)

@@ -1,6 +1,9 @@
 #include "NativeRegistry.h"
 
 #include "../Context.h"
+#include "../ReplayManager.h"
+#include "../drawing/IDrawingEngine.h"
+#include "../interface/Screenshot.h"
 #include "../Date.h"
 #include "../Game.h"
 #include "../GameState.h"
@@ -32,6 +35,8 @@ namespace OpenRCT2::CommandLine
         using json_t = nlohmann::json;
         std::mutex gSaveRootMutex;
         std::string gSaveRoot;
+        std::string gRecordingRoot;
+        std::string gCaptureRoot;
 
         json_t ObjectSchema(json_t properties, json_t required = json_t::array())
         {
@@ -559,5 +564,75 @@ namespace OpenRCT2::CommandLine
     {
         std::lock_guard lock(gSaveRootMutex);
         return gSaveRoot;
+    }
+
+    void SetNativeRecordingRoot(std::string root)
+    {
+        std::lock_guard lock(gSaveRootMutex);
+        gRecordingRoot = std::move(root);
+    }
+
+    std::string NativeRecordingRoot()
+    {
+        std::lock_guard lock(gSaveRootMutex);
+        return gRecordingRoot;
+    }
+
+    void SetNativeCaptureRoot(std::string root)
+    {
+        std::lock_guard lock(gSaveRootMutex);
+        gCaptureRoot = std::move(root);
+    }
+
+    std::string NativeCaptureRoot()
+    {
+        std::lock_guard lock(gSaveRootMutex);
+        return gCaptureRoot;
+    }
+
+    NativeDispatchResult StartNativeRecording(std::string_view path)
+    {
+        if (!NativePathContained(NativeRecordingRoot(), path))
+            return Failure("recording_containment", "recording path must remain below the owned recording root");
+        auto* replay = GetContext()->GetReplayManager();
+        if (replay == nullptr || replay->IsRecording())
+            return Failure("recording_active", "native recording is already active");
+        std::error_code error;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
+        if (error || !replay->StartRecording(std::string(path), k_MaxReplayTicks, IReplayManager::RecordType::SILENT))
+            return Failure("recording_start_failed", "the engine could not start native recording", { { "path", path } });
+        return Success({ { "status", "active" }, { "path", path }, { "tick", getGameState().currentTicks } });
+    }
+
+    NativeDispatchResult StopNativeRecording()
+    {
+        auto* replay = GetContext()->GetReplayManager();
+        if (replay == nullptr || !replay->IsRecording())
+            return Failure("recording_inactive", "native recording is not active");
+        ReplayRecordInfo info{};
+        replay->GetCurrentReplayInfo(info);
+        if (!replay->StopRecording())
+            return Failure("recording_finalize_failed", "the engine could not finalize native recording", { { "path", info.FilePath } });
+        return Success({ { "status", "final" }, { "path", info.FilePath }, { "tick", getGameState().currentTicks } });
+    }
+
+    NativeDispatchResult CaptureNativeFrame(std::string_view path)
+    {
+        if (!NativePathContained(NativeCaptureRoot(), path))
+            return Failure("capture_containment", "capture path must remain below the owned capture root");
+        auto* drawing = GetContext()->GetDrawingEngine();
+        if (drawing == nullptr)
+            return Failure("rendering_unavailable", "the admitted rendering engine is unavailable");
+        std::error_code error;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
+        if (error)
+            return Failure("capture_failed", "unable to create the capture destination", { { "path", path } });
+        const auto produced = drawing->Screenshot();
+        if (produced.empty())
+            return Failure("capture_failed", "the drawing engine produced no frame", { { "path", path } });
+        std::filesystem::rename(std::filesystem::path(produced), std::filesystem::path(path), error);
+        if (error)
+            return Failure("capture_failed", "unable to retain the rendered frame", { { "path", path }, { "error", error.message() } });
+        return Success({ { "status", "captured" }, { "path", path }, { "tick", getGameState().currentTicks } });
     }
 }

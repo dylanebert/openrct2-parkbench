@@ -62,5 +62,12 @@ namespace OpenRCT2
         bool NativePathContained(std::string_view root, std::string_view path);
         void SetNativeSaveRoot(std::string root);
         std::string NativeSaveRoot();
+        void SetNativeRecordingRoot(std::string root);
+        std::string NativeRecordingRoot();
+        void SetNativeCaptureRoot(std::string root);
+        std::string NativeCaptureRoot();
+        NativeDispatchResult StartNativeRecording(std::string_view path);
+        NativeDispatchResult StopNativeRecording();
+        NativeDispatchResult CaptureNativeFrame(std::string_view path);
     }
 }
