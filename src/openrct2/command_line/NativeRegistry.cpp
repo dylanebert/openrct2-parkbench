@@ -340,6 +340,35 @@ namespace OpenRCT2::CommandLine
             return { { "rides", std::move(rides) } };
         }
 
+        json_t StationEndpointValue(const TileCoordsXYZD& endpoint)
+        {
+            if (endpoint.IsNull())
+                return nullptr;
+            return {
+                { "x", endpoint.x },
+                { "y", endpoint.y },
+                { "z", endpoint.z },
+                { "direction", endpoint.direction },
+            };
+        }
+
+        json_t StationDetails(const Ride& ride)
+        {
+            json_t stations = json_t::array();
+            for (uint8_t index = 0; index < ride.numStations; ++index)
+            {
+                const auto& station = ride.getStation(StationIndex::FromUnderlying(index));
+                stations.push_back({
+                    { "index", index },
+                    { "start", { { "x", station.Start.x }, { "y", station.Start.y } } },
+                    { "baseZ", station.GetBaseZ() },
+                    { "entrance", StationEndpointValue(station.Entrance) },
+                    { "exit", StationEndpointValue(station.Exit) },
+                });
+            }
+            return stations;
+        }
+
         json_t ReadRide(const json_t& args, GameState_t& state)
         {
             int32_t id = 0;
@@ -348,7 +377,9 @@ namespace OpenRCT2::CommandLine
             const auto& ride = state.rides[static_cast<size_t>(id)];
             if (ride.id.IsNull())
                 return { { "error", "ride does not exist" }, { "id", id } };
-            return RideValue(ride);
+            auto result = RideValue(ride);
+            result["stationDetails"] = StationDetails(ride);
+            return result;
         }
 
         json_t ReadGuests(const json_t&, GameState_t& state)
