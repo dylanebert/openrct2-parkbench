@@ -19,11 +19,13 @@
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/ride/Ride.h>
+#include <openrct2/ride/RideData.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
 #include <openrct2/object/ObjectManager.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -162,6 +164,12 @@ protected:
 
     void SetUp() override
     {
+        LoadPark("small_park_with_ferris_wheel.sv6");
+    }
+
+    void LoadPark(const std::string& name)
+    {
+        _context.reset();
         gOpenRCT2Headless = true;
         gOpenRCT2NoGraphics = true;
         _context = OpenRCT2::CreateContext();
@@ -172,8 +180,7 @@ protected:
         ASSERT_TRUE(_context->Initialise());
 
         auto importer = OpenRCT2::ParkImporter::CreateS6(_context->GetObjectRepository());
-        auto loadResult = importer->LoadSavedGame(
-            TestData::GetParkPath("small_park_with_ferris_wheel.sv6").c_str(), false);
+        auto loadResult = importer->LoadSavedGame(TestData::GetParkPath(name).c_str(), false);
         _context->GetObjectManager().LoadObjects(loadResult.RequiredObjects);
         importer->Import(OpenRCT2::getGameState());
     }
@@ -230,7 +237,8 @@ static size_t TileElementCount(const CoordsXY& location)
     return count;
 }
 
-static bool HasStationTrack(const CoordsXY& endpoint, int16_t z, Direction direction, RideId rideId)
+static bool HasStationTrack(
+    const CoordsXY& endpoint, int16_t z, Direction direction, RideId rideId, StationIndex stationNum)
 {
     const auto trackLocation = endpoint + CoordsDirectionDelta[direction];
     auto* element = MapGetFirstElementAt(trackLocation);
@@ -242,7 +250,7 @@ static bool HasStationTrack(const CoordsXY& endpoint, int16_t z, Direction direc
         if (element->getBaseZ() == z && element->getType() == TileElementType::Track)
         {
             const auto* track = element->asTrack();
-            if (track->GetRideIndex() == rideId && track->GetStationIndex() == StationIndex::FromUnderlying(0))
+            if (track->GetRideIndex() == rideId && track->GetStationIndex() == stationNum)
                 return true;
         }
     } while (!(element++)->isLastForTile());
@@ -278,7 +286,8 @@ TEST_F(NativeActionThroughline, RideActionValidityRejectsEndpointFacingAwayWitho
     Direction invalidDirection = kInvalidDirection;
     for (const auto direction : kAllDirections)
     {
-        if (!HasStationTrack(endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id))
+        if (!HasStationTrack(
+                endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id, StationIndex::FromUnderlying(0)))
         {
             invalidDirection = direction;
             break;
@@ -318,6 +327,108 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityAcceptsExistingStationSid
     };
     checkEndpoint(station.Entrance, false);
     checkEndpoint(station.Exit, true);
+}
+
+TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
+{
+    constexpr std::array kCorpus{
+        "small_park_with_ferris_wheel.sv6",
+        "small_park_car_ride_one_car.sv6",
+        "bpb.sv6",
+        "BigMapTest.sv6",
+    };
+    bool sawFlat = false;
+    bool sawTracked = false;
+    bool sawMultiStation = false;
+    size_t endpointCases = 0;
+
+    for (const auto* fixture : kCorpus)
+    {
+        SCOPED_TRACE(fixture);
+        LoadPark(fixture);
+        auto& state = OpenRCT2::getGameState();
+        state.cheats.disableClearanceChecks = true;
+        state.cheats.sandboxMode = true;
+        const auto executableEndpointCorpus = std::string_view(fixture).starts_with("small_park_");
+
+        for (RideId::UnderlyingType rideValue = 0; rideValue < Limits::kMaxRidesInPark; ++rideValue)
+        {
+            auto* ride = GetRide(RideId::FromUnderlying(rideValue));
+            if (ride == nullptr)
+                continue;
+            ride->status = RideStatus::closed;
+            const auto hasTrack = ride->getRideTypeDescriptor().flags.has(RtdFlag::hasTrack);
+            sawFlat |= !hasTrack;
+            sawTracked |= hasTrack;
+            sawMultiStation |= ride->numStations > 1;
+
+            for (StationIndex::UnderlyingType stationValue = 0; stationValue < Limits::kMaxStationsPerRide;
+                 ++stationValue)
+            {
+                const auto stationNum = StationIndex::FromUnderlying(stationValue);
+                const auto& station = ride->getStation(stationNum);
+                const std::array endpoints{ std::pair{ station.Entrance, false }, std::pair{ station.Exit, true } };
+                for (const auto& [endpoint, isExit] : endpoints)
+                {
+                    if (endpoint.IsNull())
+                        continue;
+                    ++endpointCases;
+                    const auto endpointXY = endpoint.ToCoordsXY();
+
+                    for (uint8_t rawDirection = 0; rawDirection < 4; ++rawDirection)
+                    {
+                        const auto direction = static_cast<Direction>(rawDirection);
+                        const json_t args{
+                            { "x", endpointXY.x },
+                            { "y", endpointXY.y },
+                            { "direction", static_cast<uint32_t>(rawDirection) },
+                            { "ride", ride->id.ToUnderlying() },
+                            { "station", static_cast<uint32_t>(stationValue) },
+                            { "isExit", isExit },
+                        };
+                        const auto queried = QueryNativeAction("RideEntranceExitPlaceAction", args, state);
+                        ASSERT_TRUE(queried.ok) << fixture << " descriptor direction " << rawDirection;
+                        EXPECT_EQ(
+                            queried.value["accepted"],
+                            HasStationTrack(endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id, stationNum))
+                            << fixture << " ride " << ride->id.ToUnderlying() << " station " << stationValue << " endpoint "
+                            << (isExit ? "exit" : "entrance") << " direction " << rawDirection << " result "
+                            << queried.value.dump();
+                    }
+
+                    if (!executableEndpointCorpus)
+                        continue;
+
+                    const json_t validArgs{
+                        { "x", endpointXY.x },
+                        { "y", endpointXY.y },
+                        { "direction", static_cast<uint32_t>(endpoint.direction) },
+                        { "ride", ride->id.ToUnderlying() },
+                        { "station", static_cast<uint32_t>(stationValue) },
+                        { "isExit", isExit },
+                    };
+                    const auto executed = ExecuteNativeAction("RideEntranceExitPlaceAction", validArgs, state);
+                    ASSERT_TRUE(executed.ok) << fixture << " public endpoint execution";
+                    EXPECT_TRUE(executed.value["accepted"]) << fixture << " result " << executed.value.dump();
+
+                    auto ghostAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
+                        endpointXY, endpoint.direction, ride->id, stationNum, isExit);
+                    ghostAction.SetFlags(static_cast<OpenRCT2::GameActions::CommandFlag>(
+                        static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::ghost)
+                        | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
+                    const auto ghostResult = ghostAction.Query(state, state.park);
+                    EXPECT_EQ(ghostResult.error, OpenRCT2::GameActions::Status::ok)
+                        << fixture << " ghost endpoint " << endpointXY.x << "," << endpointXY.y << " status "
+                        << static_cast<int>(ghostResult.error);
+                }
+            }
+        }
+    }
+
+    EXPECT_GT(endpointCases, 0u);
+    EXPECT_TRUE(sawFlat);
+    EXPECT_TRUE(sawTracked);
+    EXPECT_TRUE(sawMultiStation);
 }
 
 TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
