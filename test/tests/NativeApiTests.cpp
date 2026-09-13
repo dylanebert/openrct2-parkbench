@@ -12,6 +12,9 @@
 #include <memory>
 #include <openrct2/Context.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
+#include <openrct2/actions/track/TrackDesignAction.h>
+#include <openrct2/actions/CommandFlag.h>
+#include <openrct2/actions/ResultWithMessage.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/Game.h>
 #include <openrct2/GameState.h>
@@ -20,8 +23,10 @@
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
+#include <openrct2/ride/TrackDesign.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
+#include <openrct2/world/tile_element/SurfaceElement.h>
 #include <openrct2/object/ObjectManager.h>
 
 #include <algorithm>
@@ -437,6 +442,52 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
     EXPECT_TRUE(sawFlat);
     EXPECT_TRUE(sawTracked);
     EXPECT_TRUE(sawMultiStation);
+}
+
+TEST_F(NativeActionThroughline, RideActionCompatibilityCoversTrackDesignPlacement)
+{
+    LoadPark("small_park_car_ride_one_car.sv6");
+    auto& state = OpenRCT2::getGameState();
+    state.cheats.disableClearanceChecks = true;
+    state.cheats.sandboxMode = true;
+
+    auto* ride = GetRide(RideId::FromUnderlying(0));
+    ASSERT_NE(ride, nullptr);
+    ride->status = RideStatus::closed;
+
+    TrackDesign trackDesign;
+    TrackDesignState designState{};
+    ASSERT_TRUE(trackDesign.CreateTrackDesign(designState, *ride).Successful);
+    ASSERT_FALSE(trackDesign.trackElements.empty());
+    ASSERT_FALSE(trackDesign.entranceElements.empty());
+
+    const OpenRCT2::GameActions::CommandFlags flags{
+        OpenRCT2::GameActions::CommandFlag::apply,
+        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+        OpenRCT2::GameActions::CommandFlag::noSpend,
+        OpenRCT2::GameActions::CommandFlag::replay,
+    };
+    bool placed = false;
+    for (int32_t tileY = 8; tileY < 120 && !placed; tileY += 8)
+    {
+        for (int32_t tileX = 8; tileX < 120 && !placed; tileX += 8)
+        {
+            const CoordsXY mapCoords{ tileX * kCoordsXYStep, tileY * kCoordsXYStep };
+            const auto* surface = MapGetSurfaceElementAt(mapCoords);
+            if (surface == nullptr)
+                continue;
+            const CoordsXYZD probe{ mapCoords, surface->getBaseZ(), 0 };
+            const auto placeZ = TrackDesignGetZPlacement(trackDesign, *ride, probe);
+            const CoordsXYZD origin{ mapCoords, surface->getBaseZ() + placeZ, 0 };
+            OpenRCT2::GameActions::TrackDesignAction action(
+                origin, trackDesign, false, RideInspection::every30Minutes);
+            action.SetFlags(flags);
+            const auto result = action.Execute(state, state.park);
+            if (result.error == OpenRCT2::GameActions::Status::ok)
+                placed = true;
+        }
+    }
+    EXPECT_TRUE(placed) << "track-design replay placement did not find a legal origin";
 }
 
 TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
