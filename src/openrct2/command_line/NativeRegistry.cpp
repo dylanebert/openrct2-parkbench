@@ -112,8 +112,22 @@ namespace OpenRCT2::CommandLine
                 { "carsPerTrain", ride.numCarsPerTrain },
                 { "price", ride.price[0] },
                 { "value", ride.value },
+                { "ratings", {
+                      { "excitement", static_cast<int32_t>(ride.ratings.excitement) },
+                      { "intensity", static_cast<int32_t>(ride.ratings.intensity) },
+                      { "nausea", static_cast<int32_t>(ride.ratings.nausea) },
+                  } },
+                { "queueLength", ride.getTotalQueueLength() },
+                { "occupancy", ride.numRiders },
                 { "totalCustomers", ride.totalCustomers },
                 { "totalProfit", ride.totalProfit },
+                { "profit", ride.profit },
+                { "breakdown", {
+                      { "pending", ride.flags.has(RideFlag::breakdownPending) },
+                      { "broken", ride.flags.has(RideFlag::brokenDown) },
+                      { "pendingReason", static_cast<uint8_t>(ride.breakdownReasonPending) },
+                      { "reason", static_cast<uint8_t>(ride.breakdownReason) },
+                  } },
             };
         }
 
