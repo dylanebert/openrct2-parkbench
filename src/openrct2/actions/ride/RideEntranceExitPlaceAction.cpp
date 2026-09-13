@@ -23,11 +23,34 @@
 #include "../../world/Wall.h"
 #include "../../world/tile_element/EntranceElement.h"
 #include "../../world/tile_element/Slope.h"
+#include "../../world/tile_element/TrackElement.h"
 #include "../GameActionRunner.h"
 #include "RideEntranceExitRemoveAction.h"
 
 namespace OpenRCT2::GameActions
 {
+    static bool HasMatchingStationTrack(
+        const CoordsXY& entranceLocation, int16_t baseZ, Direction direction, RideId rideIndex,
+        StationIndex stationNum)
+    {
+        const auto trackLocation = entranceLocation + CoordsDirectionDelta[direction];
+        auto* tileElement = MapGetFirstElementAt(trackLocation);
+        if (tileElement == nullptr)
+            return false;
+
+        do
+        {
+            if (tileElement->getBaseZ() != baseZ || tileElement->getType() != TileElementType::Track)
+                continue;
+
+            const auto* trackElement = tileElement->asTrack();
+            if (trackElement->GetRideIndex() == rideIndex && trackElement->GetStationIndex() == stationNum)
+                return true;
+        } while (!(tileElement++)->isLastForTile());
+
+        return false;
+    }
+
     RideEntranceExitPlaceAction::RideEntranceExitPlaceAction(
         const CoordsXY& loc, Direction direction, RideId rideIndex, StationIndex stationNum, bool isExit)
         : _loc(loc)
@@ -63,6 +86,11 @@ namespace OpenRCT2::GameActions
     {
         const auto errorTitle = _isExit ? STR_CANT_BUILD_MOVE_EXIT_FOR_THIS_RIDE_ATTRACTION
                                         : STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION;
+
+        if (!DirectionValid(_direction))
+        {
+            return Result(Status::invalidParameters, errorTitle, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
 
         auto ride = GetRide(_rideIndex);
         if (ride == nullptr)
@@ -108,6 +136,12 @@ namespace OpenRCT2::GameActions
         {
             return Result(Status::invalidParameters, errorTitle, STR_OFF_EDGE_OF_MAP);
         }
+
+        if (!HasMatchingStationTrack(_loc, z, _direction, _rideIndex, _stationNum))
+        {
+            return Result(Status::invalidParameters, errorTitle, STR_ERR_INVALID_PARAMETER);
+        }
+
         if (!gameState.cheats.sandboxMode && !MapIsLocationOwned({ _loc, z }))
         {
             return Result(Status::notOwned, errorTitle, STR_LAND_NOT_OWNED_BY_PARK);
@@ -150,6 +184,14 @@ namespace OpenRCT2::GameActions
         // When in known station num mode rideIndex is known and z is unknown
         const auto errorTitle = _isExit ? STR_CANT_BUILD_MOVE_EXIT_FOR_THIS_RIDE_ATTRACTION
                                         : STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION;
+
+        // Execute can be reached without a preceding query (replay, network, or native
+        // callers). Re-run the complete action-owned predicate before touching the old
+        // endpoint or ride state so a stale/adversarial action is non-mutating.
+        const auto validation = Query(gameState, park);
+        if (validation.error != Status::ok)
+            return validation;
+
         auto ride = GetRide(_rideIndex);
         if (ride == nullptr)
         {

@@ -11,12 +11,16 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <openrct2/Context.h>
+#include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/Game.h>
 #include <openrct2/GameState.h>
 #include <openrct2/OpenRCT2.h>
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
+#include <openrct2/ride/Ride.h>
+#include <openrct2/world/Map.h>
+#include <openrct2/world/tile_element/TrackElement.h>
 #include <openrct2/object/ObjectManager.h>
 
 #include <algorithm>
@@ -25,6 +29,7 @@
 #include <string>
 #include <vector>
 
+using namespace OpenRCT2;
 using namespace OpenRCT2::CommandLine;
 using json_t = nlohmann::json;
 
@@ -195,6 +200,124 @@ TEST_F(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStr
     EXPECT_EQ(queried.value["status"], executed.value["status"]);
     EXPECT_EQ(queried.value["rejection"], executed.value["rejection"]);
     EXPECT_EQ(state.park.cash, cashBefore);
+}
+
+static Ride* FindRideWithEntranceAndTrack()
+{
+    for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+    {
+        auto* ride = GetRide(RideId::FromUnderlying(i));
+        if (ride == nullptr)
+            continue;
+        const auto& station = ride->getStation(StationIndex::FromUnderlying(0));
+        if (!station.Start.IsNull() && !station.Entrance.IsNull())
+            return ride;
+    }
+    return nullptr;
+}
+
+static size_t TileElementCount(const CoordsXY& location)
+{
+    auto* element = MapGetFirstElementAt(location);
+    if (element == nullptr)
+        return 0;
+
+    size_t count = 0;
+    do
+    {
+        ++count;
+    } while (!(element++)->isLastForTile());
+    return count;
+}
+
+static bool HasStationTrack(const CoordsXY& endpoint, int16_t z, Direction direction, RideId rideId)
+{
+    const auto trackLocation = endpoint + CoordsDirectionDelta[direction];
+    auto* element = MapGetFirstElementAt(trackLocation);
+    if (element == nullptr)
+        return false;
+
+    do
+    {
+        if (element->getBaseZ() == z && element->getType() == TileElementType::Track)
+        {
+            const auto* track = element->asTrack();
+            if (track->GetRideIndex() == rideId && track->GetStationIndex() == StationIndex::FromUnderlying(0))
+                return true;
+        }
+    } while (!(element++)->isLastForTile());
+    return false;
+}
+
+TEST_F(NativeActionThroughline, RideActionValidityRejectsOutOfRangeDirectionWithoutMutation)
+{
+    auto* ride = FindRideWithEntranceAndTrack();
+    ASSERT_NE(ride, nullptr);
+    auto& station = ride->getStation(StationIndex::FromUnderlying(0));
+    const auto endpoint = station.Entrance;
+    const auto elementsBefore = TileElementCount(endpoint.ToCoordsXY());
+    const auto endpointDirectionBefore = endpoint.direction;
+
+    const auto action = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
+        endpoint.ToCoordsXY(), 4, ride->id, StationIndex::FromUnderlying(0), false);
+    const auto queried = action.Query(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
+    const auto executed = action.Execute(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
+
+    EXPECT_NE(queried.error, OpenRCT2::GameActions::Status::ok);
+    EXPECT_NE(executed.error, OpenRCT2::GameActions::Status::ok);
+    EXPECT_EQ(station.Entrance.direction, endpointDirectionBefore);
+    EXPECT_EQ(TileElementCount(endpoint.ToCoordsXY()), elementsBefore);
+}
+
+TEST_F(NativeActionThroughline, RideActionValidityRejectsEndpointFacingAwayWithoutMutation)
+{
+    auto* ride = FindRideWithEntranceAndTrack();
+    ASSERT_NE(ride, nullptr);
+    auto& station = ride->getStation(StationIndex::FromUnderlying(0));
+    const auto endpoint = station.Entrance;
+    Direction invalidDirection = kInvalidDirection;
+    for (const auto direction : kAllDirections)
+    {
+        if (!HasStationTrack(endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id))
+        {
+            invalidDirection = direction;
+            break;
+        }
+    }
+    ASSERT_NE(invalidDirection, kInvalidDirection);
+
+    const auto elementsBefore = TileElementCount(endpoint.ToCoordsXY());
+    const auto endpointBefore = station.Entrance;
+    const auto action = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
+        endpoint.ToCoordsXY(), invalidDirection, ride->id, StationIndex::FromUnderlying(0), false);
+    const auto queried = action.Query(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
+    const auto executed = action.Execute(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
+
+    EXPECT_NE(queried.error, OpenRCT2::GameActions::Status::ok);
+    EXPECT_NE(executed.error, OpenRCT2::GameActions::Status::ok);
+    EXPECT_EQ(station.Entrance, endpointBefore);
+    EXPECT_EQ(TileElementCount(endpoint.ToCoordsXY()), elementsBefore);
+}
+
+TEST_F(NativeActionThroughline, RideActionCompatibilityAcceptsExistingStationSides)
+{
+    auto* ride = FindRideWithEntranceAndTrack();
+    ASSERT_NE(ride, nullptr);
+    ride->status = RideStatus::closed;
+    const auto& station = ride->getStation(StationIndex::FromUnderlying(0));
+
+    OpenRCT2::getGameState().cheats.disableClearanceChecks = true;
+    const auto checkEndpoint = [&](const auto& endpoint, bool isExit) {
+        if (endpoint.IsNull())
+            return;
+        auto action = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
+            endpoint.ToCoordsXY(), endpoint.direction, ride->id, StationIndex::FromUnderlying(0), isExit);
+        action.SetFlags(OpenRCT2::GameActions::CommandFlag::allowDuringPaused);
+        const auto result = action.Query(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
+        EXPECT_EQ(result.error, OpenRCT2::GameActions::Status::ok);
+    };
+    checkEndpoint(station.Entrance, false);
+    checkEndpoint(station.Exit, true);
 }
 
 TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)

@@ -244,11 +244,18 @@ namespace OpenRCT2
         if (!GameIsPaused() || updates > std::numeric_limits<uint32_t>::max() - getGameState().currentTicks)
             return false;
 
+        // Advance the simulation logic directly while the monitor owns the paused
+        // boundary. Calling gameStateTick() here toggles pause once per request;
+        // repeated public step requests then execute request-boundary work between
+        // otherwise identical ticks and can diverge from one larger request.
         for (uint32_t i = 0; i < updates; i++)
         {
             const auto ticksBefore = getGameState().currentTicks;
-            gDoSingleUpdate = true;
-            gameStateTick();
+            PauseToggle();
+            gameStateUpdateLogic();
+            if (GameIsPaused())
+                return false;
+            PauseToggle();
             if (!GameIsPaused() || getGameState().currentTicks != ticksBefore + 1)
                 return false;
         }
