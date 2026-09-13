@@ -68,6 +68,8 @@ namespace OpenRCT2
         std::string NativeCaptureRoot();
         NativeDispatchResult StartNativeRecording(std::string_view path);
         NativeDispatchResult StopNativeRecording();
-        NativeDispatchResult CaptureNativeFrame(std::string_view path);
+        NativeDispatchResult CaptureNativeFrame(std::string_view path, const json_t& view = json_t(nullptr));
+        NativeDispatchResult ValidateNativeCaptureView(const json_t& view, int32_t mapWidth, int32_t mapHeight);
+        NativeDispatchResult ValidateNativeCaptureView(const json_t& view, const GameState_t& state);
     }
 }
