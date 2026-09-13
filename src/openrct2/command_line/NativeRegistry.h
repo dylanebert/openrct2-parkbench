@@ -47,7 +47,7 @@ namespace OpenRCT2
             json_t detail = json_t::object();
         };
 
-        const std::array<NativeResourceDescriptor, 11>& NativeResources();
+        const std::array<NativeResourceDescriptor, 12>& NativeResources();
         std::vector<NativeActionDescriptor> NativeActions();
         json_t NativeResourceDescriptorJson(const NativeResourceDescriptor& descriptor);
         json_t NativeActionDescriptorJson(const NativeActionDescriptor& descriptor);

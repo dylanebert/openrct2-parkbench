@@ -13,13 +13,17 @@
 #include "../actions/GameActionRunner.h"
 #include "../entity/Guest.h"
 #include "../entity/Peep.h"
+#include "../ride/Vehicle.h"
 #include "../object/ObjectManager.h"
 #include "../object/ObjectList.h"
 #include "../park/ParkFile.h"
 #include "../scenario/Scenario.h"
 #include "../world/Map.h"
+#include "../world/tile_element/EntranceElement.h"
 #include "../world/tile_element/PathElement.h"
+#include "../world/tile_element/TrackElement.h"
 #include "../world/tile_element/SurfaceElement.h"
+#include "../world/tile_element/TileElement.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -129,6 +133,26 @@ namespace OpenRCT2::CommandLine
                       { "reason", static_cast<uint8_t>(ride.breakdownReason) },
                   } },
             };
+        }
+
+        json_t RideVehicleIds(const Ride& ride, GameState_t* state)
+        {
+            json_t vehicles = json_t::array();
+            for (uint8_t train = 0; train < ride.numTrains; ++train)
+            {
+                auto id = ride.vehicles[train];
+                for (uint8_t car = 0; !id.IsNull() && car < Limits::kMaxCarsPerTrain; ++car)
+                {
+                    vehicles.push_back({ { "train", train }, { "car", car }, { "id", id.ToUnderlying() } });
+                    if (state == nullptr)
+                        break;
+                    const auto* vehicle = state->entities.GetEntity<Vehicle>(id);
+                    if (vehicle == nullptr)
+                        break;
+                    id = vehicle->next_vehicle_on_train;
+                }
+            }
+            return vehicles;
         }
 
         class SchemaVisitor final : public GameActions::GameActionParameterVisitor
@@ -379,7 +403,60 @@ namespace OpenRCT2::CommandLine
                 return { { "error", "ride does not exist" }, { "id", id } };
             auto result = RideValue(ride);
             result["stationDetails"] = StationDetails(ride);
+            result["vehicleIds"] = RideVehicleIds(ride, &state);
             return result;
+        }
+
+        json_t VehicleValue(const Vehicle& vehicle)
+        {
+            json_t occupants = json_t::array();
+            for (uint8_t seat = 0; seat < vehicle.num_seats; ++seat)
+            {
+                const auto guest = vehicle.peep[seat];
+                occupants.push_back(guest.IsNull() ? nullptr : json_t(guest.ToUnderlying()));
+            }
+            return {
+                { "id", vehicle.id.ToUnderlying() },
+                { "type", static_cast<uint8_t>(vehicle.type) },
+                { "x", vehicle.x },
+                { "y", vehicle.y },
+                { "z", vehicle.z },
+                { "orientation", vehicle.orientation },
+                { "ride", vehicle.ride.ToUnderlying() },
+                { "station", vehicle.current_station.ToUnderlying() },
+                { "status", static_cast<uint8_t>(vehicle.status) },
+                { "substate", vehicle.sub_state },
+                { "trackLocation", {
+                      { "x", vehicle.TrackLocation.x },
+                      { "y", vehicle.TrackLocation.y },
+                      { "z", vehicle.TrackLocation.z },
+                  } },
+                { "trackType", static_cast<uint16_t>(vehicle.GetTrackType()) },
+                { "trackDirection", vehicle.GetTrackDirection() },
+                { "trackProgress", vehicle.track_progress },
+                { "nextVehicleOnTrain", vehicle.next_vehicle_on_train.IsNull()
+                                               ? nullptr
+                                               : json_t(vehicle.next_vehicle_on_train.ToUnderlying()) },
+                { "prevVehicleOnRide", vehicle.prev_vehicle_on_ride.IsNull()
+                                              ? nullptr
+                                              : json_t(vehicle.prev_vehicle_on_ride.ToUnderlying()) },
+                { "nextVehicleOnRide", vehicle.next_vehicle_on_ride.IsNull()
+                                              ? nullptr
+                                              : json_t(vehicle.next_vehicle_on_ride.ToUnderlying()) },
+                { "seatCount", vehicle.num_seats },
+                { "occupants", std::move(occupants) },
+            };
+        }
+
+        json_t ReadVehicle(const json_t& args, GameState_t& state)
+        {
+            int32_t id = 0;
+            if (!IsObject(args) || !ReadInt(args, "id", id) || id < 0 || id >= kMaxEntities)
+                return { { "error", "id must identify an existing vehicle" } };
+            const auto* vehicle = state.entities.GetEntity<Vehicle>(EntityId::FromUnderlying(static_cast<uint16_t>(id)));
+            if (vehicle == nullptr)
+                return { { "error", "vehicle does not exist" }, { "id", id } };
+            return VehicleValue(*vehicle);
         }
 
         json_t ReadGuests(const json_t&, GameState_t& state)
@@ -405,6 +482,17 @@ namespace OpenRCT2::CommandLine
             result["name"] = guest->GetName();
             result["peepId"] = guest->PeepId;
             result["currentRide"] = guest->CurrentRide.ToUnderlying();
+            result["state"] = static_cast<uint8_t>(guest->State);
+            result["substate"] = guest->SubState;
+            result["nextLocation"] = {
+                { "x", guest->NextLoc.x },
+                { "y", guest->NextLoc.y },
+                { "z", guest->NextLoc.z },
+            };
+            result["currentStation"] = guest->CurrentRideStation.ToUnderlying();
+            result["currentTrain"] = guest->CurrentTrain;
+            result["currentCar"] = guest->CurrentCar;
+            result["currentSeat"] = guest->CurrentSeat;
             return result;
         }
 
@@ -419,6 +507,46 @@ namespace OpenRCT2::CommandLine
             return { { "objects", std::move(objects) } };
         }
 
+        json_t TileElementValue(const TileElement& element)
+        {
+            json_t value = {
+                { "type", static_cast<uint8_t>(element.getType()) },
+                { "baseZ", element.getBaseZ() },
+                { "clearanceZ", element.getClearanceZ() },
+                { "direction", static_cast<uint8_t>(element.getDirection()) },
+                { "ghost", element.isGhost() },
+            };
+            if (const auto* track = element.asTrack())
+            {
+                value["track"] = {
+                    { "ride", track->GetRideIndex().ToUnderlying() },
+                    { "trackType", static_cast<uint16_t>(track->GetTrackType()) },
+                    { "sequence", track->GetSequenceIndex() },
+                    { "station", track->GetStationIndex().ToUnderlying() },
+                };
+            }
+            else if (const auto* entrance = element.asEntrance())
+            {
+                value["entrance"] = {
+                    { "ride", entrance->GetRideIndex().ToUnderlying() },
+                    { "station", entrance->GetStationIndex().ToUnderlying() },
+                    { "type", entrance->GetEntranceType() },
+                };
+            }
+            else if (const auto* path = element.asPath())
+            {
+                value["path"] = {
+                    { "edges", path->GetEdges() },
+                    { "slope", path->IsSloped() },
+                    { "slopeDirection", static_cast<uint8_t>(path->GetSlopeDirection()) },
+                    { "queue", path->IsQueue() },
+                    { "rideQueue", path->GetRideIndex().ToUnderlying() },
+                    { "station", path->GetStationIndex().ToUnderlying() },
+                };
+            }
+            return value;
+        }
+
         json_t ReadTile(const json_t& args, GameState_t&)
         {
             int32_t x = 0;
@@ -430,6 +558,8 @@ namespace OpenRCT2::CommandLine
                 return { { "error", "tile is outside the map" }, { "x", x }, { "y", y } };
             if (args.contains("includePath") && !args["includePath"].is_boolean())
                 return { { "error", "includePath must be a boolean" } };
+            if (args.contains("includeElements") && !args["includeElements"].is_boolean())
+                return { { "error", "includeElements must be a boolean" } };
 
             json_t result = {
                 { "x", x },
@@ -466,6 +596,19 @@ namespace OpenRCT2::CommandLine
                 }
                 result["path"] = std::move(path);
             }
+            if (args.value("includeElements", false))
+            {
+                json_t elements = json_t::array();
+                auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                while (element != nullptr)
+                {
+                    elements.push_back(TileElementValue(*element));
+                    if (element->isLastForTile())
+                        break;
+                    ++element;
+                }
+                result["elements"] = std::move(elements);
+            }
             return result;
         }
 
@@ -481,7 +624,7 @@ namespace OpenRCT2::CommandLine
             };
         }
 
-        const std::array<NativeResourceDescriptor, 11> kResources = {
+        const std::array<NativeResourceDescriptor, 12> kResources = {
             NativeResourceDescriptor{
                 "session", "Current native engine session state.", ObjectSchema({}), { { "tick", "ticks" }, { "sequence", "requests" } },
                 "engine", json_t::array(), "native", [](const json_t&, GameState_t& state) {
@@ -496,21 +639,23 @@ namespace OpenRCT2::CommandLine
             { "rides", "Authoritative collection of rides.", EmptySchema(), { { "id", "ride" }, { "price", "money" } },
                 "engine", json_t::array(), "native", ReadRides },
             { "ride", "Authoritative state for one ride.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "ride" }, { "price", "money" } }, "engine", json_t::array(), "native", ReadRide },
+                { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } }, "engine", json_t::array(), "native", ReadRide },
+            { "vehicle", "Authoritative state for one ride vehicle.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
+                { { "id", "entity" }, { "ride", "ride" }, { "x", "map-units" }, { "trackProgress", "track-progress" } }, "engine", json_t::array(), "native", ReadVehicle },
             { "guests", "Authoritative collection of guest entities.", EmptySchema(), { { "id", "entity" }, { "x", "map-units" } },
                 "engine", json_t::array(), "native", ReadGuests },
             { "guest", "Authoritative state for one guest entity.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
                 { { "id", "entity" }, { "x", "map-units" } }, "engine", json_t::array(), "native", ReadGuest },
             { "objects", "Authoritative loaded object identities.", EmptySchema(), { { "count", "objects" } },
                 "engine", json_t::array(), "native", ReadObjects },
-            { "tile", "Authoritative surface and optional path state at a map tile.", ObjectSchema({ { "x", { { "type", "integer" } } }, { "y", { { "type", "integer" } } }, { "includePath", { { "type", "boolean" } } } }, { "x", "y" }),
-                { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" } }, "engine", json_t::array(), "native", ReadTile },
+            { "tile", "Authoritative surface and optional path state at a map tile.", ObjectSchema({ { "x", { { "type", "integer" } } }, { "y", { { "type", "integer" } } }, { "includePath", { { "type", "boolean" } } }, { "includeElements", { { "type", "boolean" } } } }, { "x", "y" }),
+                { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" }, { "elements", "ordered" } }, "engine", json_t::array(), "native", ReadTile },
             { "region", "Derived map-boundary projection from mapSize.", EmptySchema(), { { "mapWidth", "map-units" }, { "mapHeight", "map-units" } },
                 "derived", { "mapSize" }, "native", ReadRegion },
         };
     }
 
-    const std::array<NativeResourceDescriptor, 11>& NativeResources()
+    const std::array<NativeResourceDescriptor, 12>& NativeResources()
     {
         return kResources;
     }

@@ -8,7 +8,10 @@
 
 #include <gtest/gtest.h>
 #include <openrct2/command_line/NativeRegistry.h>
+#include <openrct2/Game.h>
+#include <openrct2/GameState.h>
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <vector>
@@ -19,7 +22,7 @@ using json_t = nlohmann::json;
 TEST(NativeApiRegistry, HasOneExactInitialResourcePopulation)
 {
     const std::vector<std::string> expected{
-        "session", "park", "date", "finance", "rides", "ride", "guests", "guest", "objects", "tile", "region",
+        "session", "park", "date", "finance", "rides", "ride", "vehicle", "guests", "guest", "objects", "tile", "region",
     };
     std::vector<std::string> actual;
     for (const auto& descriptor : NativeResources())
@@ -136,6 +139,40 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
             150)
             .code,
         "capture_view_rotation");
+}
+
+TEST(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStructured)
+{
+    auto& state = OpenRCT2::getGameState();
+    const json_t args{
+        { "x", 0 },
+        { "y", 0 },
+        { "direction", 2 },
+        { "ride", 65535 },
+        { "station", 0 },
+        { "isExit", true },
+    };
+    const auto cashBefore = state.park.cash;
+    const auto queried = QueryNativeAction("RideEntranceExitPlaceAction", args, state);
+    const auto executed = ExecuteNativeAction("RideEntranceExitPlaceAction", args, state);
+    EXPECT_TRUE(queried.ok);
+    EXPECT_TRUE(executed.ok);
+    EXPECT_EQ(queried.value["accepted"], false);
+    EXPECT_EQ(executed.value["accepted"], false);
+    EXPECT_EQ(queried.value["status"], executed.value["status"]);
+    EXPECT_EQ(queried.value["rejection"], executed.value["rejection"]);
+    EXPECT_EQ(state.park.cash, cashBefore);
+}
+
+TEST(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
+{
+    const auto actions = NativeActions();
+    const auto it = std::find_if(actions.begin(), actions.end(), [](const auto& action) {
+        return std::string_view(action.name) == "RideEntranceExitPlaceAction";
+    });
+    ASSERT_NE(it, actions.end());
+    const auto descriptor = NativeActionDescriptorJson(*it);
+    EXPECT_EQ(descriptor["policy"]["flags"], "native-controlled");
 }
 
 TEST(NativeApiPolicy, UniversalFlagsAreNotCallerControlledAndSavePathsAreContained)
