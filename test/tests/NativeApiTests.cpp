@@ -420,6 +420,14 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
                     EXPECT_EQ(ghostResult.error, OpenRCT2::GameActions::Status::ok)
                         << fixture << " ghost endpoint " << endpointXY.x << "," << endpointXY.y << " status "
                         << static_cast<int>(ghostResult.error);
+
+                    auto replayAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
+                        endpointXY, endpoint.direction, ride->id, stationNum, isExit);
+                    replayAction.SetFlags(static_cast<OpenRCT2::GameActions::CommandFlag>(
+                        static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::replay)
+                        | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
+                    EXPECT_EQ(replayAction.Query(state, state.park).error, OpenRCT2::GameActions::Status::ok)
+                        << fixture << " replay endpoint " << endpointXY.x << "," << endpointXY.y;
                 }
             }
         }
