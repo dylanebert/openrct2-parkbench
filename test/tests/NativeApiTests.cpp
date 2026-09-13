@@ -6,12 +6,21 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 
+#include "TestData.h"
+
 #include <gtest/gtest.h>
+#include <memory>
+#include <openrct2/Context.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/Game.h>
 #include <openrct2/GameState.h>
+#include <openrct2/OpenRCT2.h>
+#include <openrct2/ParkImporter.h>
+#include <openrct2/PlatformEnvironment.h>
+#include <openrct2/object/ObjectManager.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <set>
 #include <string>
 #include <vector>
@@ -141,7 +150,31 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
         "capture_view_rotation");
 }
 
-TEST(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStructured)
+class NativeActionThroughline : public testing::Test
+{
+protected:
+    std::unique_ptr<OpenRCT2::IContext> _context;
+
+    void SetUp() override
+    {
+        gOpenRCT2Headless = true;
+        gOpenRCT2NoGraphics = true;
+        _context = OpenRCT2::CreateContext();
+        ASSERT_NE(_context, nullptr);
+        const auto resources = std::filesystem::current_path() / "OpenRCT2.app/Contents/Resources";
+        _context->GetPlatformEnvironment().SetBasePath(
+            OpenRCT2::DirBase::openrct2, resources.string());
+        ASSERT_TRUE(_context->Initialise());
+
+        auto importer = OpenRCT2::ParkImporter::CreateS6(_context->GetObjectRepository());
+        auto loadResult = importer->LoadSavedGame(
+            TestData::GetParkPath("small_park_with_ferris_wheel.sv6").c_str(), false);
+        _context->GetObjectManager().LoadObjects(loadResult.RequiredObjects);
+        importer->Import(OpenRCT2::getGameState());
+    }
+};
+
+TEST_F(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStructured)
 {
     auto& state = OpenRCT2::getGameState();
     const json_t args{
@@ -164,7 +197,7 @@ TEST(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStruc
     EXPECT_EQ(state.park.cash, cashBefore);
 }
 
-TEST(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
+TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
 {
     const auto actions = NativeActions();
     const auto it = std::find_if(actions.begin(), actions.end(), [](const auto& action) {
