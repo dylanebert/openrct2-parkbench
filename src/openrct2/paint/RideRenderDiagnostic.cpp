@@ -30,7 +30,7 @@ namespace OpenRCT2
                 bytes.push_back(static_cast<uint8_t>(unsignedValue >> (i * 8)));
             }
         }
-    }
+    } // namespace
 
     std::string RideRenderDiagnostic::StableSpriteIdentity(const G1Element& sprite)
     {
@@ -86,8 +86,7 @@ namespace OpenRCT2
             _recordsTruncated = true;
             return ordinal;
         }
-        _records.push_back(
-            { Phase::paint, component, source, ordinal, image, StableSpriteIdentity(image), screenPosition });
+        _records.push_back({ Phase::paint, component, source, ordinal, image, StableSpriteIdentity(image), screenPosition });
         return ordinal;
     }
 
@@ -116,16 +115,13 @@ namespace OpenRCT2
             return candidate.phase == Phase::paint && candidate.source == selection.source
                 && candidate.componentOrdinal == selection.componentOrdinal;
         });
-        if (record == _records.end() || record->stableIdentity.empty() || selection.stableIdentity.empty())
-            return false;
-        if (record->image.GetIndex() != selection.selectedImageIndex
-            || record->image.GetRemap() != selection.imagePrimary
-            || static_cast<uint8_t>(record->image.GetSecondary()) != selection.imageSecondary
-            || record->stableIdentity != selection.stableIdentity)
-            return false;
-        if (selection.selectedImageIndex != selection.baseImageIndex + selection.imageOffset
-            || selection.imageOffset != (static_cast<uint32_t>(selection.flatRideAnimationFrame) << 2)
-                + selection.orientationQuarter)
+        // The paint record is the authoritative source/component join. The
+        // selected ImageId is deliberately retained as raw engine evidence:
+        // station remaps and palette resolution can differ from the
+        // diagnostic image record without changing which paint call emitted
+        // the Enterprise parent. Do not silently erase the selection at the
+        // exact palette-cliff ticks this diagnostic exists to explain.
+        if (record == _records.end())
             return false;
 
         _enterpriseSelections.push_back(selection);
