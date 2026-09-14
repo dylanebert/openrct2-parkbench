@@ -154,6 +154,13 @@ TEST(RideRenderDiagnostic, EnterpriseBoundariesExposeAdjacentSelectionAndRejectC
     EXPECT_EQ(diagnostic.EnterpriseSelections()[0].bodyColour, diagnostic.EnterpriseSelections()[1].bodyColour);
     EXPECT_EQ(diagnostic.EnterpriseSelections()[0].trimColour, diagnostic.EnterpriseSelections()[1].trimColour);
 
+    // The source/component join remains valid even when the raw selected image
+    // representation differs after palette/station remapping.
+    auto remapped = add(12, 241);
+    remapped.first.imagePrimary++;
+    EXPECT_TRUE(diagnostic.RecordEnterpriseSelection(remapped.first));
+    ASSERT_EQ(diagnostic.EnterpriseSelections().size(), 5u);
+
     auto missingAnimation = frame12.first;
     missingAnimation.imageOffset = 0;
     EXPECT_FALSE(diagnostic.RecordEnterpriseSelection(missingAnimation));
