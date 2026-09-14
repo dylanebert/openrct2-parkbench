@@ -538,10 +538,13 @@ namespace OpenRCT2::CommandLine
             return "unknown";
         }
 
-        json_t RideRenderDiagnosticImageValue(const ImageId& image)
+        json_t RideRenderDiagnosticImageValue(const ImageId& image, std::string_view stableIdentity)
         {
             return {
+                // The raw index is retained for engine compatibility but is process-local.
                 { "index", static_cast<uint32_t>(image.GetIndex()) },
+                // This content-derived identity is stable across image-table allocation order.
+                { "stableIdentity", stableIdentity.empty() ? json_t(nullptr) : json_t(stableIdentity) },
                 { "primary", image.GetRemap() },
                 { "secondary", static_cast<uint8_t>(image.GetSecondary()) },
                 { "tertiary", static_cast<uint8_t>(image.GetTertiary()) },
@@ -556,7 +559,7 @@ namespace OpenRCT2::CommandLine
                 { "component", RideRenderDiagnosticComponentName(record.component) },
                 { "source", RideRenderDiagnosticSourceValue(record.source) },
                 { "componentOrdinal", record.componentOrdinal },
-                { "image", RideRenderDiagnosticImageValue(record.image) },
+                { "image", RideRenderDiagnosticImageValue(record.image, record.stableIdentity) },
                 { "screenPosition", { { "x", record.screenPosition.x }, { "y", record.screenPosition.y } } },
             };
         }

@@ -13,10 +13,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace OpenRCT2
 {
+    struct G1Element;
+
     /**
      * Renderer-only evidence for joining a paint request to the draw request
      * that consumed it. It deliberately contains no validity or duplication
@@ -64,8 +67,14 @@ namespace OpenRCT2
             RideRenderDiagnosticSource source;
             uint32_t componentOrdinal;
             ImageId image;
+            // Empty only when the engine cannot resolve the image to sprite content.
+            std::string stableIdentity;
             ScreenCoordsXY screenPosition;
         };
+
+        // Hashes authoritative sprite metadata and encoded content, never the process-local image index.
+        static std::string StableSpriteIdentity(const G1Element& sprite);
+        static std::string StableSpriteIdentity(ImageId image);
 
         uint32_t RecordPaint(
             RideRenderDiagnosticSource source, Component component, ImageId image, const ScreenCoordsXY& screenPosition);
