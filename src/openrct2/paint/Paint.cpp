@@ -27,6 +27,11 @@
 #include "Boundbox.h"
 #include "Paint.Entity.h"
 #include "tile_element/Paint.TileElement.h"
+#include "../ride/Vehicle.h"
+#include "../world/tile_element/EntranceElement.h"
+#include "../world/tile_element/PathElement.h"
+#include "../world/tile_element/TileElement.h"
+#include "../world/tile_element/TrackElement.h"
 
 #include <algorithm>
 #include <array>
@@ -174,6 +179,65 @@ static constexpr CoordsXYZ RotateBoundBoxSize(const CoordsXYZ& bbSize, const uin
 /**
  * Extracted from 0x0098196c, 0x0098197c, 0x0098198c, 0x0098199c
  */
+static OpenRCT2::RideRenderDiagnosticSource GetRideRenderDiagnosticSource(const PaintSession& session)
+{
+    OpenRCT2::RideRenderDiagnosticSource source;
+    source.mapPosition = session.MapPosition;
+
+    if (session.CurrentlyDrawnTileElement != nullptr)
+    {
+        const auto* element = session.CurrentlyDrawnTileElement;
+        source.elementType = EnumValue(element->getType());
+        source.ride = element->GetRideIndex().ToUnderlying();
+        source.direction = element->getDirection();
+        switch (element->getType())
+        {
+            case OpenRCT2::TileElementType::Track:
+                source.station = element->asTrack()->GetStationIndex().ToUnderlying();
+                source.trackType = EnumValue(element->asTrack()->GetTrackType());
+                source.trackSequence = element->asTrack()->GetSequenceIndex();
+                break;
+            case OpenRCT2::TileElementType::Entrance:
+                source.station = element->asEntrance()->GetStationIndex().ToUnderlying();
+                source.trackSequence = element->asEntrance()->GetSequenceIndex();
+                break;
+            case OpenRCT2::TileElementType::Path:
+                source.station = element->asPath()->GetStationIndex().ToUnderlying();
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (session.CurrentlyDrawnEntity != nullptr)
+    {
+        const auto* entity = session.CurrentlyDrawnEntity;
+        source.entity = entity->id.ToUnderlying();
+        source.entityType = EnumValue(entity->type);
+        if (const auto* vehicle = entity->as<Vehicle>(); vehicle != nullptr)
+        {
+            source.ride = vehicle->ride.ToUnderlying();
+            source.station = vehicle->current_station.ToUnderlying();
+            source.trackType = EnumValue(vehicle->GetTrackType());
+            source.trackSequence = 0;
+            source.direction = entity->orientation;
+        }
+    }
+
+    return source;
+}
+
+static void RecordRideRenderPaint(
+    PaintSession& session, PaintStruct& paintStruct, const OpenRCT2::RideRenderDiagnostic::Component component)
+{
+    paintStruct.DiagnosticComponent = component;
+    if (session.RideDiagnostic != nullptr)
+    {
+        paintStruct.DiagnosticComponentOrdinal = session.RideDiagnostic->RecordPaint(
+            paintStruct.DiagnosticSource, component, paintStruct.image_id, paintStruct.ScreenPos);
+    }
+}
+
 static PaintStruct* CreateNormalPaintStruct(
     PaintSession& session, ImageId image_id, const CoordsXYZ& offset, const BoundBoxXYZ& boundBox)
 {
@@ -218,6 +282,7 @@ static PaintStruct* CreateNormalPaintStruct(
     ps->MapPos = session.MapPosition;
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
+    ps->DiagnosticSource = GetRideRenderDiagnosticSource(session);
 
     return ps;
 }
@@ -266,6 +331,7 @@ static PaintStruct* CreateNormalPaintStructHeight(
     ps->MapPos = session.MapPosition;
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
+    ps->DiagnosticSource = GetRideRenderDiagnosticSource(session);
 
     return ps;
 }
@@ -677,21 +743,27 @@ void PaintSessionArrange(PaintSessionCore& session)
     return _paintArrangeFuncsLegacy[session.CurrentRotation](session);
 }
 
-static inline void PaintAttachedPS(RenderTarget& rt, PaintStruct* ps, uint32_t viewFlags)
+static inline void PaintAttachedPS(PaintSession& session, PaintStruct* ps)
 {
     AttachedPaintStruct* attached_ps = ps->Attached;
     for (; attached_ps != nullptr; attached_ps = attached_ps->NextEntry)
     {
         const auto screenCoords = ps->ScreenPos + attached_ps->RelativePos;
 
-        auto imageId = PaintPSColourifyImage(ps, attached_ps->image_id, viewFlags);
+        auto imageId = PaintPSColourifyImage(ps, attached_ps->image_id, session.ViewFlags);
+        if (session.RideDiagnostic != nullptr)
+        {
+            session.RideDiagnostic->RecordDraw(
+                attached_ps->DiagnosticSource, OpenRCT2::RideRenderDiagnostic::Component::attached,
+                attached_ps->DiagnosticComponentOrdinal, imageId, screenCoords);
+        }
         if (attached_ps->IsMasked)
         {
-            GfxDrawSpriteRawMasked(rt, screenCoords, imageId, attached_ps->ColourImageId);
+            GfxDrawSpriteRawMasked(session.rt, screenCoords, imageId, attached_ps->ColourImageId);
         }
         else
         {
-            GfxDrawSprite(rt, imageId, screenCoords);
+            GfxDrawSprite(session.rt, imageId, screenCoords);
         }
     }
 }
@@ -713,6 +785,11 @@ static inline void PaintDrawStruct(PaintSession& session, PaintStruct* ps)
         }
     }
     auto imageId = PaintPSColourifyImage(ps, ps->image_id, session.ViewFlags);
+    if (session.RideDiagnostic != nullptr)
+    {
+        session.RideDiagnostic->RecordDraw(
+            ps->DiagnosticSource, ps->DiagnosticComponent, ps->DiagnosticComponentOrdinal, imageId, screenPos);
+    }
     if (gPaintBoundingBoxes)
     {
         PaintPSImageWithBoundingBoxes(session, ps, imageId, screenPos.x, screenPos.y);
@@ -728,7 +805,7 @@ static inline void PaintDrawStruct(PaintSession& session, PaintStruct* ps)
     }
     else
     {
-        PaintAttachedPS(session.rt, ps, session.ViewFlags);
+        PaintAttachedPS(session, ps);
     }
 }
 
@@ -858,6 +935,11 @@ void PaintSessionFree(PaintSession* session)
     GetContext()->GetPainter()->ReleaseSession(session);
 }
 
+void PaintSessionSetRideRenderDiagnostic(PaintSession& session, OpenRCT2::RideRenderDiagnostic* diagnostic)
+{
+    session.RideDiagnostic = diagnostic;
+}
+
 /**
  *  rct2: 0x00686806, 0x006869B2, 0x00686B6F, 0x00686D31, 0x0098197C
  *
@@ -887,6 +969,7 @@ PaintStruct* PaintAddImageAsParent(
     }
 
     PaintSessionAddPSToQuadrant(session, ps);
+    RecordRideRenderPaint(session, *ps, OpenRCT2::RideRenderDiagnostic::Component::parent);
 
     return ps;
 }
@@ -913,7 +996,12 @@ PaintStruct* PaintAddImageAsParent(
 {
     session.LastPS = nullptr;
     session.LastAttachedPS = nullptr;
-    return CreateNormalPaintStruct(session, imageId, offset, boundBox);
+    auto* ps = CreateNormalPaintStruct(session, imageId, offset, boundBox);
+    if (ps != nullptr)
+    {
+        RecordRideRenderPaint(session, *ps, OpenRCT2::RideRenderDiagnostic::Component::parent);
+    }
+    return ps;
 }
 
 /**
@@ -949,6 +1037,7 @@ PaintStruct* PaintAddImageAsChild(
     }
 
     parentPS->Children = ps;
+    RecordRideRenderPaint(session, *ps, OpenRCT2::RideRenderDiagnostic::Component::child);
 
     return ps;
 }
@@ -966,6 +1055,7 @@ PaintStruct* PaintAddImageAsParentHeight(
     }
 
     PaintSessionAddPSToQuadrant(session, ps);
+    RecordRideRenderPaint(session, *ps, OpenRCT2::RideRenderDiagnostic::Component::parent);
 
     return ps;
 }
@@ -996,6 +1086,15 @@ bool PaintAttachToPreviousAttach(PaintSession& session, const ImageId imageId, i
     ps->RelativePos = { x, y };
     ps->IsMasked = false;
     ps->NextEntry = nullptr;
+    ps->DiagnosticSource = previousAttachedPS->DiagnosticSource;
+    if (session.RideDiagnostic != nullptr)
+    {
+        const auto screenPosition = session.LastPS != nullptr
+            ? session.LastPS->ScreenPos + ScreenCoordsXY{ x, y }
+            : ScreenCoordsXY{};
+        ps->DiagnosticComponentOrdinal = session.RideDiagnostic->RecordPaint(
+            ps->DiagnosticSource, OpenRCT2::RideRenderDiagnostic::Component::attached, imageId, screenPosition);
+    }
 
     previousAttachedPS->NextEntry = ps;
 
@@ -1027,6 +1126,13 @@ bool PaintAttachToPreviousPS(PaintSession& session, const ImageId image_id, int3
     ps->image_id = image_id;
     ps->RelativePos = { x, y };
     ps->IsMasked = false;
+    ps->DiagnosticSource = masterPs->DiagnosticSource;
+    if (session.RideDiagnostic != nullptr)
+    {
+        ps->DiagnosticComponentOrdinal = session.RideDiagnostic->RecordPaint(
+            ps->DiagnosticSource, OpenRCT2::RideRenderDiagnostic::Component::attached, image_id,
+            masterPs->ScreenPos + ScreenCoordsXY{ x, y });
+    }
 
     AttachedPaintStruct* oldFirstAttached = masterPs->Attached;
     masterPs->Attached = ps;
