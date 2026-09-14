@@ -12,8 +12,10 @@
 #include <memory>
 #include <openrct2/Context.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
+#include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
 #include <openrct2/actions/track/TrackDesignAction.h>
 #include <openrct2/actions/CommandFlag.h>
+#include <openrct2/actions/GameActionRunner.h>
 #include <openrct2/actions/ResultWithMessage.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/Game.h>
@@ -211,6 +213,10 @@ TEST_F(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStr
     EXPECT_EQ(executed.value["accepted"], false);
     EXPECT_EQ(queried.value["status"], executed.value["status"]);
     EXPECT_EQ(queried.value["rejection"], executed.value["rejection"]);
+    ASSERT_TRUE(queried.value["rejection"].contains("code"));
+    ASSERT_TRUE(queried.value["rejection"].contains("title"));
+    ASSERT_TRUE(queried.value["rejection"].contains("message"));
+    ASSERT_TRUE(queried.value["rejection"].contains("detail"));
     EXPECT_EQ(state.park.cash, cashBefore);
 }
 
@@ -240,6 +246,87 @@ static size_t TileElementCount(const CoordsXY& location)
         ++count;
     } while (!(element++)->isLastForTile());
     return count;
+}
+
+TEST_F(NativeActionThroughline, AcceptedPlacementChargesAndMatchesOrdinaryRunner)
+{
+    auto* ordinaryRide = FindRideWithEntranceAndTrack();
+    ASSERT_NE(ordinaryRide, nullptr);
+    const auto ordinaryStation = StationIndex::FromUnderlying(0);
+    const auto ordinaryRideId = ordinaryRide->id;
+    const auto ordinaryEndpoint = ordinaryRide->getStation(ordinaryStation).Entrance;
+    ASSERT_FALSE(ordinaryEndpoint.IsNull());
+    const json_t args{
+        { "x", ordinaryEndpoint.ToCoordsXY().x },
+        { "y", ordinaryEndpoint.ToCoordsXY().y },
+        { "direction", static_cast<uint8_t>(ordinaryEndpoint.direction) },
+        { "ride", ordinaryRideId.ToUnderlying() },
+        { "station", ordinaryStation.ToUnderlying() },
+        { "isExit", false },
+    };
+
+    auto& ordinaryState = OpenRCT2::getGameState();
+    ordinaryState.cheats.disableClearanceChecks = true;
+    ordinaryState.cheats.sandboxMode = true;
+    auto removeOrdinary = OpenRCT2::GameActions::RideEntranceExitRemoveAction(
+        ordinaryEndpoint.ToCoordsXY(), ordinaryRideId, ordinaryStation, false);
+    removeOrdinary.SetFlags({
+        OpenRCT2::GameActions::CommandFlag::apply,
+        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+    });
+    const auto oldInUpdateCode = gInUpdateCode;
+    gInUpdateCode = true;
+    ASSERT_EQ(
+        OpenRCT2::GameActions::Execute(&removeOrdinary, ordinaryState).error,
+        OpenRCT2::GameActions::Status::ok);
+    gInUpdateCode = oldInUpdateCode;
+    const auto ordinaryCashBefore = ordinaryState.park.cash;
+    const auto ordinaryElementsBefore = TileElementCount(ordinaryEndpoint.ToCoordsXY());
+    auto ordinaryAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
+        ordinaryEndpoint.ToCoordsXY(), ordinaryEndpoint.direction, ordinaryRideId, ordinaryStation, false);
+    ordinaryAction.SetFlags({
+        OpenRCT2::GameActions::CommandFlag::apply,
+        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+    });
+    gInUpdateCode = true;
+    const auto ordinaryResult = OpenRCT2::GameActions::Execute(&ordinaryAction, ordinaryState);
+    gInUpdateCode = oldInUpdateCode;
+
+    ASSERT_EQ(ordinaryResult.error, OpenRCT2::GameActions::Status::ok);
+    const auto ordinaryCashDelta = ordinaryState.park.cash - ordinaryCashBefore;
+    const auto ordinaryElementsAfter = TileElementCount(ordinaryEndpoint.ToCoordsXY());
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& publicState = OpenRCT2::getGameState();
+    publicState.cheats.disableClearanceChecks = true;
+    publicState.cheats.sandboxMode = true;
+    auto* publicRide = GetRide(ordinaryRideId);
+    ASSERT_NE(publicRide, nullptr);
+    auto removePublic = OpenRCT2::GameActions::RideEntranceExitRemoveAction(
+        ordinaryEndpoint.ToCoordsXY(), ordinaryRideId, ordinaryStation, false);
+    removePublic.SetFlags({
+        OpenRCT2::GameActions::CommandFlag::apply,
+        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+    });
+    gInUpdateCode = true;
+    ASSERT_EQ(
+        OpenRCT2::GameActions::Execute(&removePublic, publicState).error,
+        OpenRCT2::GameActions::Status::ok);
+    gInUpdateCode = oldInUpdateCode;
+    const auto publicCashBefore = publicState.park.cash;
+    const auto publicElementsBefore = TileElementCount(ordinaryEndpoint.ToCoordsXY());
+    const auto queried = QueryNativeAction("RideEntranceExitPlaceAction", args, publicState);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+    const auto executed = ExecuteNativeAction("RideEntranceExitPlaceAction", args, publicState);
+
+    ASSERT_TRUE(executed.ok);
+    ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
+    EXPECT_EQ(executed.value["status"], static_cast<uint16_t>(ordinaryResult.error));
+    EXPECT_EQ(executed.value["cost"], ordinaryResult.cost);
+    EXPECT_EQ(publicState.park.cash - publicCashBefore, ordinaryCashDelta);
+    EXPECT_EQ(publicElementsBefore, ordinaryElementsBefore);
+    EXPECT_EQ(TileElementCount(ordinaryEndpoint.ToCoordsXY()), ordinaryElementsAfter);
 }
 
 static bool HasStationTrack(

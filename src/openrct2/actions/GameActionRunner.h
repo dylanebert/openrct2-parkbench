@@ -30,6 +30,11 @@ namespace OpenRCT2::GameActions
     Result Query(const GameAction* action, GameState_t& gameState);
     Result Execute(const GameAction* action, GameState_t& gameState);
 
+    // Run one already-admitted action synchronously at a paused native boundary.
+    // This keeps the ordinary action query, execution, callbacks, and finance path
+    // while deliberately omitting queue, network, replay, and UI presentation.
+    Result ExecuteSynchronous(const GameAction* action, GameState_t& gameState);
+
     // This should be used from within game actions.
     Result QueryNested(const GameAction* action, GameState_t& gameState);
     Result ExecuteNested(const GameAction* action, GameState_t& gameState);

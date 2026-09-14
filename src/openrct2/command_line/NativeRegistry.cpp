@@ -249,6 +249,44 @@ namespace OpenRCT2::CommandLine
             }
         };
 
+        const char* ActionStatusCode(GameActions::Status status)
+        {
+            switch (status)
+            {
+                case GameActions::Status::ok:
+                    return "ok";
+                case GameActions::Status::invalidParameters:
+                    return "invalid_parameters";
+                case GameActions::Status::disallowed:
+                    return "disallowed";
+                case GameActions::Status::gamePaused:
+                    return "game_paused";
+                case GameActions::Status::insufficientFunds:
+                    return "insufficient_funds";
+                case GameActions::Status::notInEditorMode:
+                    return "not_in_editor_mode";
+                case GameActions::Status::notOwned:
+                    return "not_owned";
+                case GameActions::Status::tooLow:
+                    return "too_low";
+                case GameActions::Status::tooHigh:
+                    return "too_high";
+                case GameActions::Status::noClearance:
+                    return "no_clearance";
+                case GameActions::Status::itemAlreadyPlaced:
+                    return "item_already_placed";
+                case GameActions::Status::notClosed:
+                    return "not_closed";
+                case GameActions::Status::broken:
+                    return "broken";
+                case GameActions::Status::noFreeElements:
+                    return "no_free_elements";
+                case GameActions::Status::unknown:
+                    return "unknown";
+            }
+            return "unknown";
+        }
+
         NativeDispatchResult FindAction(
             std::string_view name, const json_t& args, GameState_t& state, bool execute)
         {
@@ -287,7 +325,7 @@ namespace OpenRCT2::CommandLine
                 // action at the paused simulation boundary and lets the engine's
                 // own Query/Execute implementation decide whether it is valid.
                 action->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
-                const auto result = execute ? GameActions::ExecuteNested(action.get(), state)
+                const auto result = execute ? GameActions::ExecuteSynchronous(action.get(), state)
                                             : GameActions::Query(action.get(), state);
                 json_t response = {
                     { "action", registration.name },
@@ -303,8 +341,10 @@ namespace OpenRCT2::CommandLine
                 if (result.error != GameActions::Status::ok)
                 {
                     response["rejection"] = {
+                        { "code", ActionStatusCode(result.error) },
                         { "title", result.getErrorTitle() },
                         { "message", result.getErrorMessage() },
+                        { "detail", { { "status", static_cast<uint16_t>(result.error) } } },
                     };
                 }
                 return Success(std::move(response));

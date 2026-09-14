@@ -259,7 +259,8 @@ namespace OpenRCT2::GameActions
         Network::AppendServerLog(text);
     }
 
-    static Result ExecuteInternal(const GameAction* action, GameState_t& gameState, bool topLevel)
+    static Result ExecuteInternal(
+        const GameAction* action, GameState_t& gameState, bool topLevel, bool synchronous = false)
     {
         Guard::ArgumentNotNull(action);
 
@@ -270,7 +271,7 @@ namespace OpenRCT2::GameActions
         const auto ignoreForReplays = (actionFlags & Flags::IgnoreForReplays) != 0;
 
         auto* replayManager = GetContext()->GetReplayManager();
-        if (replayManager != nullptr && (replayManager->IsReplaying() || replayManager->IsNormalising()))
+        if (!synchronous && replayManager != nullptr && (replayManager->IsReplaying() || replayManager->IsNormalising()))
         {
             // We only accept replay commands as long the replay is active.
             if (!flags.has(CommandFlag::replay) && !ignoreForReplays)
@@ -296,7 +297,7 @@ namespace OpenRCT2::GameActions
 #endif
         if (result.error == Status::ok)
         {
-            if (topLevel)
+            if (topLevel && !synchronous)
             {
                 // Networked games send actions to the server to be run
                 if (Network::GetMode() == Network::Mode::client)
@@ -326,7 +327,7 @@ namespace OpenRCT2::GameActions
             }
 
             ActionLogContext logContext;
-            if (topLevel && !flags.has(CommandFlag::ghost))
+            if (topLevel && !synchronous && !flags.has(CommandFlag::ghost))
             {
                 LogActionBegin(gameState, logContext, action);
             }
@@ -344,7 +345,7 @@ namespace OpenRCT2::GameActions
                 // Script hooks may now have changed the game action result...
             }
 #endif
-            if (topLevel && !flags.has(CommandFlag::ghost))
+            if (topLevel && !synchronous && !flags.has(CommandFlag::ghost))
             {
                 LogActionFinish(logContext, action, result);
             }
@@ -360,7 +361,7 @@ namespace OpenRCT2::GameActions
                 MoneyEffect::Create(result.cost, result.position);
             }
 
-            if (!(actionFlags & Flags::ClientOnly) && result.error == Status::ok)
+            if (!synchronous && !(actionFlags & Flags::ClientOnly) && result.error == Status::ok)
             {
                 if (Network::GetMode() != Network::Mode::none)
                 {
@@ -401,8 +402,9 @@ namespace OpenRCT2::GameActions
                 }
             }
 
-            // Allow autosave to commence
-            if (gLastAutoSaveUpdate == kAutosavePause)
+            // Allow autosave to commence for ordinary actions. Native synchronous
+            // dispatch deliberately omits this presentation/transport-adjacent hook.
+            if (!synchronous && gLastAutoSaveUpdate == kAutosavePause)
             {
                 gLastAutoSaveUpdate = Platform::GetTicks();
             }
@@ -430,7 +432,7 @@ namespace OpenRCT2::GameActions
             }
         }
 
-        if (result.error != Status::ok && shouldShowError)
+        if (result.error != Status::ok && shouldShowError && !synchronous)
         {
             auto windowManager = Ui::GetWindowManager();
             windowManager->ShowError(result.getErrorTitle(), result.getErrorMessage());
@@ -442,6 +444,11 @@ namespace OpenRCT2::GameActions
     Result Execute(const GameAction* action, GameState_t& gameState)
     {
         return ExecuteInternal(action, gameState, true);
+    }
+
+    Result ExecuteSynchronous(const GameAction* action, GameState_t& gameState)
+    {
+        return ExecuteInternal(action, gameState, true, true);
     }
 
     Result ExecuteNested(const GameAction* action, GameState_t& gameState)
