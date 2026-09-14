@@ -64,6 +64,7 @@ namespace OpenRCT2::GameActions
         if (_type >= RideSetVehicleType::count)
         {
             LOG_ERROR("Invalid ride vehicle type %d", _type);
+            return Result(Status::invalidParameters, STR_RIDE_SET_VEHICLE_TYPE_FAIL, STR_ERR_VALUE_OUT_OF_RANGE);
         }
         auto errTitle = kSetVehicleTypeErrorTitle[EnumValue(_type)];
 
@@ -87,8 +88,25 @@ namespace OpenRCT2::GameActions
         switch (_type)
         {
             case RideSetVehicleType::numTrains:
+                if (_value == 0 || _value > ride->maxTrains)
+                {
+                    return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
+                }
+                break;
             case RideSetVehicleType::numCarsPerTrain:
+            {
+                const auto* rideEntry = GetRideEntryByIndex(ride->subtype);
+                if (rideEntry == nullptr || _value < rideEntry->min_cars_in_train || _value > rideEntry->max_cars_in_train)
+                {
+                    return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
+                }
+                break;
+            }
             case RideSetVehicleType::trainsReversed:
+                if (_value > 1)
+                {
+                    return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
+                }
                 break;
             case RideSetVehicleType::rideEntry:
             {

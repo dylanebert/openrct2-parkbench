@@ -52,6 +52,11 @@ namespace OpenRCT2::GameActions
             return Result(Status::invalidParameters, STR_CANT_RENAME_RIDE_ATTRACTION, STR_ERR_RIDE_NOT_FOUND);
         }
 
+        if (_name.size() > 32)
+        {
+            return Result(Status::invalidParameters, STR_CANT_RENAME_RIDE_ATTRACTION, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
+
         if (!_name.empty() && Ride::nameExists(_name, ride->id))
         {
             return Result(Status::invalidParameters, STR_CANT_RENAME_RIDE_ATTRACTION, STR_ERROR_EXISTING_NAME);

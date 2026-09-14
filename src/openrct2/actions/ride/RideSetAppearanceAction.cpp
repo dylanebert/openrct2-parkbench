@@ -9,10 +9,14 @@
 
 #include "RideSetAppearanceAction.h"
 
+#include "../../Context.h"
 #include "../../Diagnostic.h"
 #include "../../drawing/Drawing.h"
 #include "../../localisation/StringIds.h"
+#include "../../object/ObjectManager.h"
+#include "../../object/StationObject.h"
 #include "../../ride/Ride.h"
+#include "../../ride/RideColour.h"
 #include "../../ui/WindowManager.h"
 #include "../../world/Map.h"
 
@@ -65,6 +69,10 @@ namespace OpenRCT2::GameActions
                     LOG_ERROR("Invalid track colour %u", _index);
                     return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_INVALID_COLOUR);
                 }
+                if (_value >= Drawing::kColourNumNormal)
+                {
+                    return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_INVALID_COLOUR);
+                }
                 break;
             case RideSetAppearanceType::vehicleColourBody:
             case RideSetAppearanceType::vehicleColourTrim:
@@ -74,10 +82,29 @@ namespace OpenRCT2::GameActions
                     LOG_ERROR("Invalid vehicle colour %u", _index);
                     return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_INVALID_COLOUR);
                 }
+                if (_value >= Drawing::kColourNumNormal)
+                {
+                    return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_INVALID_COLOUR);
+                }
                 break;
             case RideSetAppearanceType::vehicleColourScheme:
+                if (_value >= kNumVehicleColourSettings)
+                {
+                    return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_VALUE_OUT_OF_RANGE);
+                }
+                break;
             case RideSetAppearanceType::entranceStyle:
+                if (_value != kObjectEntryIndexNull
+                    && GetContext()->GetObjectManager().GetLoadedObject<StationObject>(_value) == nullptr)
+                {
+                    return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_UNKNOWN_OBJECT_TYPE);
+                }
+                break;
             case RideSetAppearanceType::sellingItemColourIsRandom:
+                if (_value > 1)
+                {
+                    return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_VALUE_OUT_OF_RANGE);
+                }
                 break;
             default:
                 LOG_ERROR("Invalid ride appearance type %u", _type);
