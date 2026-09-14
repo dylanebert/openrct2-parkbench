@@ -53,6 +53,11 @@ void EntityPaintSetup(PaintSession& session, const CoordsXY& pos)
 {
     PROFILED_FUNCTION();
 
+    // Entity paint can be scheduled without a preceding tile-element paint in
+    // a reused session. Keep diagnostic sources tied to the entity's tile
+    // rather than leaking the previous column's MapPosition.
+    session.MapPosition = pos;
+
     if (!MapIsLocationValid(pos))
     {
         return;
