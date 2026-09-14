@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace OpenRCT2
@@ -103,28 +104,61 @@ namespace OpenRCT2
             { Phase::draw, component, source, componentOrdinal, image, StableSpriteIdentity(image), screenPosition });
     }
 
-    bool RideRenderDiagnostic::RecordEnterpriseSelection(const EnterpriseSpriteSelection selection)
+    bool RideRenderDiagnostic::HasPaintRecord(
+        const RideRenderDiagnosticSource& source, const uint32_t componentOrdinal) const
     {
-        for (const auto& existing : _enterpriseSelections)
+        return std::find_if(_records.begin(), _records.end(), [&source, componentOrdinal](const auto& candidate) {
+                   return candidate.phase == Phase::paint && candidate.source == source
+                       && candidate.componentOrdinal == componentOrdinal;
+               })
+            != _records.end();
+    }
+
+    FlatRideSelectionRecordResult RideRenderDiagnostic::TryRecordFlatRideSelection(
+        const FlatRideSpriteSelection selection)
+    {
+        for (const auto& existing : _flatRideSelections)
         {
             if (existing.source == selection.source && existing.componentOrdinal == selection.componentOrdinal)
-                return false;
+                return FlatRideSelectionRecordResult::duplicateComponent;
         }
 
-        const auto record = std::find_if(_records.begin(), _records.end(), [&selection](const auto& candidate) {
-            return candidate.phase == Phase::paint && candidate.source == selection.source
-                && candidate.componentOrdinal == selection.componentOrdinal;
-        });
         // The paint record is the authoritative source/component join. The
         // selected ImageId is deliberately retained as raw engine evidence:
         // station remaps and palette resolution can differ from the
         // diagnostic image record without changing which paint call emitted
-        // the Enterprise parent. Do not silently erase the selection at the
+        // the flat-ride parent. Do not silently erase the selection at the
         // exact palette-cliff ticks this diagnostic exists to explain.
-        if (record == _records.end())
-            return false;
+        if (!HasPaintRecord(selection.source, selection.componentOrdinal))
+            return FlatRideSelectionRecordResult::sourceComponentMissing;
 
-        _enterpriseSelections.push_back(selection);
-        return true;
+        _flatRideSelections.push_back(selection);
+        return FlatRideSelectionRecordResult::recorded;
+    }
+
+    bool RideRenderDiagnostic::RecordFlatRideSelection(const FlatRideSpriteSelection selection)
+    {
+        return TryRecordFlatRideSelection(selection) == FlatRideSelectionRecordResult::recorded;
+    }
+
+    EnterpriseSelectionRecordResult RideRenderDiagnostic::TryRecordEnterpriseSelection(
+        const EnterpriseSpriteSelection selection)
+    {
+        return TryRecordFlatRideSelection(selection);
+    }
+
+    bool RideRenderDiagnostic::RecordEnterpriseSelection(const EnterpriseSpriteSelection selection)
+    {
+        return RecordFlatRideSelection(selection);
+    }
+
+    void RideRenderDiagnostic::RecordFlatRideSelectionAttempt(FlatRideSelectionAttempt attempt)
+    {
+        if (_flatRideSelectionAttempts.size() >= kMaxFlatRideSelectionAttempts)
+        {
+            _flatRideAttemptsTruncated = true;
+            return;
+        }
+        _flatRideSelectionAttempts.push_back(std::move(attempt));
     }
 } // namespace OpenRCT2
