@@ -30,7 +30,7 @@ namespace OpenRCT2
                 bytes.push_back(static_cast<uint8_t>(unsignedValue >> (i * 8)));
             }
         }
-    }
+    } // namespace
 
     std::string RideRenderDiagnostic::StableSpriteIdentity(const G1Element& sprite)
     {
@@ -86,8 +86,7 @@ namespace OpenRCT2
             _recordsTruncated = true;
             return ordinal;
         }
-        _records.push_back(
-            { Phase::paint, component, source, ordinal, image, StableSpriteIdentity(image), screenPosition });
+        _records.push_back({ Phase::paint, component, source, ordinal, image, StableSpriteIdentity(image), screenPosition });
         return ordinal;
     }
 
