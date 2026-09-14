@@ -35,7 +35,10 @@ namespace OpenRCT2::CommandLine
     {
     public:
         static constexpr uint32_t kProtocolVersion = 1;
-        static constexpr uint32_t kMaxFrameBytes = 64 * 1024;
+        // Diagnostic capture responses contain bounded paint/draw records. Keep the
+        // wire frame bounded, but large enough to carry the complete bounded
+        // diagnostic response without turning a successful capture into EOF.
+        static constexpr uint32_t kMaxFrameBytes = 4 * 1024 * 1024;
         static constexpr uint32_t kMaxStepTicks = 1'000'000;
 
         explicit NativeMonitor(int descriptor);
