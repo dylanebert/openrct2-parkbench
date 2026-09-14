@@ -193,7 +193,7 @@ PaintSession* Painter::CreateSession(RenderTarget& rt, uint32_t viewFlags, uint8
     session->InteractionType = ViewportInteractionItem::none;
     session->PathElementOnSameHeight = nullptr;
     session->TrackElementOnSameHeight = nullptr;
-    session->RideDiagnostic = nullptr;
+    session->RideDiagnostic = rt.RideDiagnostic;
 
     return session;
 }

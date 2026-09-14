@@ -27,6 +27,11 @@ namespace OpenRCT2
         const ScreenCoordsXY& screenPosition)
     {
         const auto ordinal = NextComponentOrdinal(source);
+        if (_records.size() >= kMaxRecords)
+        {
+            _recordsTruncated = true;
+            return ordinal;
+        }
         _records.push_back({ Phase::paint, component, source, ordinal, image, screenPosition });
         return ordinal;
     }
@@ -35,6 +40,11 @@ namespace OpenRCT2
         const RideRenderDiagnosticSource source, const Component component, const uint32_t componentOrdinal,
         const ImageId image, const ScreenCoordsXY& screenPosition)
     {
+        if (_records.size() >= kMaxRecords)
+        {
+            _recordsTruncated = true;
+            return;
+        }
         _records.push_back({ Phase::draw, component, source, componentOrdinal, image, screenPosition });
     }
 } // namespace OpenRCT2

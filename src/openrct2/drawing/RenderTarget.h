@@ -12,6 +12,11 @@
 #include "../interface/ZoomLevel.h"
 #include "../world/Location.hpp"
 
+namespace OpenRCT2
+{
+    class RideRenderDiagnostic;
+}
+
 namespace OpenRCT2::Drawing
 {
     struct IDrawingEngine;
@@ -35,6 +40,7 @@ namespace OpenRCT2::Drawing
         ScreenCoordsXY lastStringPos{};
 
         IDrawingEngine* DrawingEngine{};
+        OpenRCT2::RideRenderDiagnostic* RideDiagnostic{};
 
         PaletteIndex* GetBitsOffset(const ScreenCoordsXY& pos) const;
         RenderTarget Crop(const ScreenCoordsXY& pos, const ScreenSize& size) const;
