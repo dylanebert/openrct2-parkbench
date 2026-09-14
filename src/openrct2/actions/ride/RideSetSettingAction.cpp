@@ -70,7 +70,7 @@ namespace OpenRCT2::GameActions
                     return Result(Status::disallowed, STR_CANT_CHANGE_OPERATING_MODE, STR_MUST_BE_CLOSED_FIRST);
                 }
 
-                if (!RideIsModeValid(*ride) && !gameState.cheats.showAllOperatingModes)
+                if (_value >= 64 || (!RideIsModeValid(*ride) && !gameState.cheats.showAllOperatingModes))
                 {
                     LOG_ERROR("Invalid ride mode: %u", _value);
                     return Result(Status::invalidParameters, STR_CANT_CHANGE_OPERATING_MODE, STR_ERR_VALUE_OUT_OF_RANGE);

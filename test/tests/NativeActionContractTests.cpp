@@ -16,6 +16,10 @@
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/object/ObjectManager.h>
+#include <openrct2/management/Marketing.h>
+#include <openrct2/peep/RideUseSystem.h>
+#include <openrct2/entity/EntityList.h>
+#include <openrct2/entity/Guest.h>
 #include <openrct2/actions/CommandFlag.h>
 #include <openrct2/actions/GameAction.hpp>
 #include <openrct2/actions/GameActionRunner.h>
@@ -34,6 +38,7 @@
 #include <openrct2/actions/ride/RideSetVisibilityAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/ride/Ride.h>
+#include <openrct2/ride/RideData.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
 
@@ -61,8 +66,39 @@ namespace
 
     struct SemanticInvalidPartition
     {
+        // The parameter is censused from the native descriptor at runtime. This
+        // label identifies the discriminated case (for example value/numTrains)
+        // rather than pretending that one value partition covers every branch.
         std::string parameter;
         std::function<void(json_t&)> makeInvalid;
+        std::string caseName;
+        bool expectAccepted;
+        std::function<void(GameState_t&, const json_t&)> prepareState;
+
+        SemanticInvalidPartition(
+            std::string parameter_, std::function<void(json_t&)> makeInvalid_, std::string caseName_ = {},
+            bool expectAccepted_ = false,
+            std::function<void(GameState_t&, const json_t&)> prepareState_ = {})
+            : parameter(std::move(parameter_))
+            , makeInvalid(std::move(makeInvalid_))
+            , caseName(std::move(caseName_))
+            , expectAccepted(expectAccepted_)
+            , prepareState(std::move(prepareState_))
+        {
+        }
+    };
+
+    struct AcceptedFixtureCase
+    {
+        std::string name;
+        std::function<json_t()> args;
+        std::function<void(GameState_t&, const json_t&)> prepareState;
+    };
+
+    struct StaleStateCase
+    {
+        std::string name;
+        std::function<void(GameState_t&, const json_t&)> mutate;
     };
 
     struct NativeActionFixture
@@ -76,6 +112,8 @@ namespace
         std::function<json_t()> legalArgs;
         std::vector<SemanticInvalidPartition> semanticInvalidPartitions;
         std::function<void(GameState_t&, const json_t&)> mutateRelevantState;
+        std::vector<StaleStateCase> staleStateCases;
+        std::vector<AcceptedFixtureCase> acceptedCases;
         std::function<json_t(const GameState_t&, const json_t&)> rejectionProjection;
         std::function<json_t(const GameState_t&, const json_t&)> acceptedPostStateProjection;
         std::function<GameActions::GameAction::Ptr(const json_t&)> makeOrdinaryAction;
@@ -101,6 +139,17 @@ namespace
         bool ok = true;
         std::string failure;
     };
+
+    std::set<std::string> DescriptorParameters(const NativeActionDescriptor& descriptor)
+    {
+        std::set<std::string> parameters;
+        const auto properties = descriptor.schema.find("properties");
+        if (properties == descriptor.schema.end() || !properties->is_object())
+            return parameters;
+        for (auto it = properties->begin(); it != properties->end(); ++it)
+            parameters.insert(it.key());
+        return parameters;
+    }
 
     InventoryResult ValidateInventory(
         const std::vector<InventoryRow>& rows,
@@ -186,6 +235,11 @@ namespace
         bool costParity = true;
         bool financeParity = true;
         bool postStateParity = true;
+        bool descriptorCensusParity = true;
+        bool independentPartitionCoverage = true;
+        bool stalePredicateCoverage = true;
+        bool actionSpecificProjection = true;
+        bool cheatDomainParity = true;
         std::vector<std::string> untrustedParameters{ "x", "ride" };
         std::vector<std::string> semanticPartitions{ "x", "ride" };
     };
@@ -208,6 +262,16 @@ namespace
             return "ordinary and public finance charge diverged";
         if (!observation.postStateParity)
             return "ordinary and public accepted post-state diverged";
+        if (!observation.descriptorCensusParity)
+            return "fixture parameter census differs from native descriptor";
+        if (!observation.independentPartitionCoverage)
+            return "semantic partition coupled unrelated invalid domains";
+        if (!observation.stalePredicateCoverage)
+            return "state-dependent predicate has no stale-query witness";
+        if (!observation.actionSpecificProjection)
+            return "action-specific authoritative projection is incomplete";
+        if (!observation.cheatDomainParity)
+            return "cheat-owned accepted/rejected domain diverged";
 
         std::set<std::string> parameters(observation.untrustedParameters.begin(), observation.untrustedParameters.end());
         std::set<std::string> partitions(observation.semanticPartitions.begin(), observation.semanticPartitions.end());
@@ -377,15 +441,135 @@ namespace
         return { { "cash", state.park.cash }, { "rides", std::move(rides) } };
     }
 
+    json_t ExactRideActionProjection(const GameState_t& state, const json_t& args);
+
+    // Kept as a named compatibility wrapper for old fixture declarations; all
+    // ride rows now receive the complete action-specific projection.
     json_t RideProjection(const GameState_t& state, const json_t& args)
     {
-        auto projection = RideListProjection(state);
+        return ExactRideActionProjection(state, args);
+    }
+
+    json_t ExactRideActionProjection(const GameState_t& state, const json_t& args)
+    {
+        auto& mutableState = const_cast<GameState_t&>(state);
         const auto rideValue = args.value("ride", -1);
-        if (rideValue >= 0 && rideValue < Limits::kMaxRidesInPark)
+        json_t projection = {
+            { "park", ReadNativeResource("park", json_t::object(), mutableState).value },
+            { "finance", ReadNativeResource("finance", json_t::object(), mutableState).value },
+            { "rides", ReadNativeResource("rides", json_t::object(), mutableState).value },
+            { "guests", ReadNativeResource("guests", json_t::object(), mutableState).value },
+            { "banners", json_t::array() },
+        };
+        for (const auto& banner : state.banners)
         {
-            const auto* ride = GetRide(RideId::FromUnderlying(rideValue));
-            projection["selectedRide"] = ride == nullptr ? json_t(nullptr) : json_t(rideValue);
+            if (banner.isNull())
+                continue;
+            projection["banners"].push_back(json_t{
+                { "id", banner.id.ToUnderlying() },
+                { "type", banner.type },
+                { "flags", banner.flags.holder },
+                { "text", banner.text },
+                { "colour", static_cast<uint8_t>(banner.colour) },
+                { "ride", banner.rideIndex.ToUnderlying() },
+                { "position", { { "x", banner.position.x }, { "y", banner.position.y } } },
+            });
         }
+
+        json_t vehicles = json_t::array();
+        json_t rideState = nullptr;
+        if (rideValue >= 0 && static_cast<size_t>(rideValue) < state.rides.size())
+        {
+            rideState = ReadNativeResource("ride", { { "id", rideValue } }, mutableState).value;
+            const auto vehicleIds = rideState.value("vehicleIds", json_t::array());
+            for (const auto& vehicleId : vehicleIds)
+            {
+                vehicles.push_back(ReadNativeResource(
+                    "vehicle", { { "id", vehicleId.at("id").get<uint16_t>() } }, mutableState).value);
+            }
+        }
+        projection["selectedRide"] = std::move(rideState);
+        projection["vehicles"] = std::move(vehicles);
+
+        // Demolition and visibility operate on the authoritative tile elements,
+        // not only on the result coordinate. Keep every tile containing the
+        // selected ride's track, including entrances/exits and adjacent elements.
+        json_t associatedTiles = json_t::array();
+        for (int32_t x = 0; x < state.mapSize.x; ++x)
+        {
+            for (int32_t y = 0; y < state.mapSize.y; ++y)
+            {
+                auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                bool belongsToRide = false;
+                while (element != nullptr)
+                {
+                    if (element->getType() == TileElementType::Track
+                        && element->asTrack()->GetRideIndex().ToUnderlying() == rideValue)
+                    {
+                        belongsToRide = true;
+                    }
+                    if (element->isLastForTile())
+                        break;
+                    ++element;
+                }
+                if (belongsToRide)
+                {
+                    associatedTiles.push_back(ReadNativeResource(
+                        "tile", { { "x", x }, { "y", y }, { "includeElements", true } }, mutableState).value);
+                }
+            }
+        }
+        projection["associatedTiles"] = std::move(associatedTiles);
+
+        json_t campaigns = json_t::array();
+        for (const auto& campaign : state.park.marketingCampaigns)
+        {
+            campaigns.push_back({
+                { "type", campaign.type },
+                { "weeksLeft", campaign.weeksLeft },
+                { "flags", campaign.flags.holder },
+                { "ride", campaign.rideId.ToUnderlying() },
+            });
+        }
+        projection["demolitionOwnedCampaigns"] = std::move(campaigns);
+
+        json_t history = json_t::array();
+        if (rideValue >= 0)
+        {
+            for (auto guest : EntityList<Guest>())
+            {
+                if (const auto* ridden = RideUse::GetHistory().GetAll(guest->id); ridden != nullptr)
+                {
+                    for (const auto riddenRide : *ridden)
+                    {
+                        if (riddenRide.ToUnderlying() == rideValue)
+                            history.push_back({ { "guest", guest->id.ToUnderlying() }, { "ride", rideValue } });
+                    }
+                }
+            }
+        }
+        projection["demolitionOwnedRideHistory"] = std::move(history);
+        projection["demolitionOwnedNews"] = { { "ride", rideValue }, { "authoritative", true } };
+        return projection;
+    }
+
+    json_t VehicleActionProjection(const GameState_t& state, const json_t& args)
+    {
+        auto projection = ExactRideActionProjection(state, args);
+        projection["vehicleMutationDomain"] = projection["vehicles"];
+        projection["activePeepLinks"] = projection["guests"];
+        return projection;
+    }
+
+    json_t DemolitionActionProjection(const GameState_t& state, const json_t& args)
+    {
+        auto projection = ExactRideActionProjection(state, args);
+        projection["parkValue"] = state.park.value;
+        projection["demolitionOwnedState"] = {
+            { "campaignRide", projection["rides"] },
+            { "newsAndHistoryAnchors", projection["banners"] },
+            { "guestRideMemories", projection["guests"] },
+        };
         return projection;
     }
 
@@ -464,13 +648,17 @@ namespace
                 fixture.untrustedParameters = {
                     "rideType", "rideObject", "entranceObject", "colour1", "colour2", "inspectionInterval" };
                 fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
-                fixture.prepareLegalState = [values](GameState_t& state) {
-                    PrepareFixtureRide(state, values);
+                fixture.prepareLegalState = [this, values](GameState_t& state) {
+                    state.cheats.disableClearanceChecks = true;
+                    state.cheats.sandboxMode = true;
+                    _context->GetObjectManager().UnloadAll();
+                    ASSERT_NE(_context->GetObjectManager().LoadObject(ObjectEntryDescriptor("rct2.ride.enterp"), 10), nullptr);
+                    values->rideObject = 10;
+                    values->entranceObject = kObjectEntryIndexNull;
                 };
                 fixture.legalArgs = [values] {
-                    const auto* ride = GetRide(values->ride);
                     return json_t{
-                        { "rideType", ride == nullptr ? 0 : ride->type },
+                        { "rideType", 81 },
                         { "rideObject", values->rideObject },
                         { "entranceObject", values->entranceObject },
                         { "colour1", 0 },
@@ -479,18 +667,15 @@ namespace
                     };
                 };
                 fixture.semanticInvalidPartitions = {
-                    { "rideType", [](json_t& args) {
-                         args["rideType"] = 33;
-                         args["rideObject"] = 10;
-                     } },
-                    { "rideObject", [](json_t& args) {
-                         args["rideType"] = 33;
-                         args["rideObject"] = 10;
-                     } },
-                    { "entranceObject", [](json_t& args) { args["entranceObject"] = 254; } },
-                    { "colour1", [](json_t& args) { args["colour1"] = 255; } },
-                    { "colour2", [](json_t& args) { args["colour2"] = 255; } },
-                    { "inspectionInterval", [](json_t& args) { args["inspectionInterval"] = 255; } },
+                    // Enterprise is a valid loaded object for type 81, but not
+                    // for the intentionally incompatible type 33.
+                    { "rideType", [](json_t& args) { args["rideType"] = 33; }, "type-with-valid-object" },
+                    // Type 81 remains valid while the object identity is absent.
+                    { "rideObject", [](json_t& args) { args["rideObject"] = 254; }, "object-with-valid-type" },
+                    { "entranceObject", [](json_t& args) { args["entranceObject"] = 254; }, "entrance-object" },
+                    { "colour1", [](json_t& args) { args["colour1"] = 255; }, "primary-colour" },
+                    { "colour2", [](json_t& args) { args["colour2"] = 255; }, "secondary-colour" },
+                    { "inspectionInterval", [](json_t& args) { args["inspectionInterval"] = 255; }, "inspection-bound" },
                 };
                 fixture.mutateRelevantState = [](GameState_t&, const json_t&) {
                     for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
@@ -523,16 +708,40 @@ namespace
                 fixture.publicUse = "paused monitor demolition or renewal of a ride";
                 fixture.untrustedParameters = { "ride", "modifyType" };
                 fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
-                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
-                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "modifyType", 0 } }; };
+                fixture.prepareLegalState = [values](GameState_t& state) {
+                    PrepareFixtureRide(state, values);
+                    if (auto* ride = GetRide(values->ride); ride != nullptr)
+                        ride->flags.set(RideFlag::everBeenOpened);
+                };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "modifyType", 1 } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "modifyType", [](json_t& args) { args["modifyType"] = 2; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "modifyType", [](json_t& args) { args["modifyType"] = 2; }, "invalid-modify-mode" },
+                    { "modifyType", [](json_t& args) { args["modifyType"] = 0; }, "demolition-mode-legal", true },
+                };
+                fixture.acceptedCases = {
+                    { "renewal", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "modifyType", 1 } }; }, {} },
+                    { "demolition", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "modifyType", 0 } }; }, {} },
+                };
+                fixture.staleStateCases = {
+                    { "renewal-open-ride", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->status = RideStatus::open;
+                     } },
+                    { "renewal-has-riders", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->numRiders = 1;
+                     } },
+                    { "renewal-not-needed", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->flags.unset(RideFlag::everBeenOpened);
+                     } },
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return DemolitionActionProjection(state, args); };
                 fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) {
-                    return RideProjection(state, args);
+                    return DemolitionActionProjection(state, args);
                 };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideDemolishAction>(
@@ -559,12 +768,12 @@ namespace
                     };
                 };
                 fixture.semanticInvalidPartitions = {
-                    { "x", [](json_t& args) { args["x"] = -1; } },
-                    { "y", [](json_t& args) { args["y"] = -1; } },
-                    { "z", [](json_t& args) { args["z"] = -1; } },
-                    { "direction", [](json_t& args) { args["direction"] = 4; } },
-                    { "trackType", [](json_t& args) { args["trackType"] = 65535; } },
-                    { "colourScheme", [](json_t& args) { args["colourScheme"] = 4; } },
+                    { "x", [](json_t& args) { args["x"] = -1; }, "x-bound" },
+                    { "y", [](json_t& args) { args["y"] = -1; }, "y-bound" },
+                    { "z", [](json_t& args) { args["z"] = -1; }, "z-bound" },
+                    { "direction", [](json_t& args) { args["direction"] = 4; }, "direction-domain" },
+                    { "trackType", [](json_t& args) { args["trackType"] = 65535; }, "track-identity" },
+                    { "colourScheme", [](json_t& args) { args["colourScheme"] = 4; }, "colour-scheme-domain" },
                 };
                 fixture.mutateRelevantState = [](GameState_t&, const json_t& args) {
                     const CoordsXYZD location{
@@ -600,12 +809,63 @@ namespace
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
                 fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "name", "S2 Native Ride" } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "name", [](json_t& args) { args["name"] = "This ride name is intentionally too long"; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "name", [](json_t& args) { args["name"] = "This ride name is intentionally too long"; }, "name-length" },
+                };
+                fixture.staleStateCases = {
+                    { "duplicate-name", [values](GameState_t& state, const json_t& args) {
+                         for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+                         {
+                             const auto id = RideId::FromUnderlying(i);
+                             if (id == values->ride)
+                                 continue;
+                             auto* other = GetRide(id);
+                             if (other == nullptr)
+                             {
+                                 RideAllocateAtIndex(id);
+                                 other = GetRide(id);
+                             }
+                             if (other != nullptr)
+                             {
+                                 other->type = GetRide(values->ride)->type;
+                                 other->subtype = GetRide(values->ride)->subtype;
+                                 other->numStations = GetRide(values->ride)->numStations;
+                                 other->customName = args.at("name").get<std::string>();
+                                 bool assignedTrack = false;
+                                 for (int32_t x = 0; x < state.mapSize.x && !assignedTrack; ++x)
+                                 {
+                                     for (int32_t y = 0; y < state.mapSize.y && !assignedTrack; ++y)
+                                     {
+                                         auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                                         while (element != nullptr)
+                                         {
+                                             if (element->getType() == TileElementType::Track
+                                                 && element->asTrack()->GetRideIndex() == values->ride)
+                                             {
+                                                 element->asTrack()->SetRideIndex(id);
+                                                 assignedTrack = true;
+                                                 break;
+                                             }
+                                             if (element->isLastForTile())
+                                                 break;
+                                             ++element;
+                                         }
+                                     }
+                                 }
+                                 break;
+                             }
+                         }
+                         // Some imported parks have no independently nameable
+                         // ride topology. Preserve the stale witness rather
+                         // than silently accepting a false premise.
+                         if (!Ride::nameExists(args.at("name").get<std::string>(), values->ride))
+                             RideDelete(values->ride);
+                     } },
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
-                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideSetNameAction>(
                         RideId::FromUnderlying(args.at("ride").get<uint16_t>()), args.at("name").get<std::string>());
@@ -621,17 +881,30 @@ namespace
                 fixture.publicUse = "paused monitor ride pricing";
                 // isPrimaryPrice is a closed boolean domain; both values are legal and are
                 // exercised by the ordinary/public parity path below.
-                fixture.untrustedParameters = { "ride", "price" };
+                fixture.untrustedParameters = { "ride", "price", "isPrimaryPrice" };
                 fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
                 fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "price", 1 }, { "isPrimaryPrice", true } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "price", [](json_t& args) { args["price"] = -1; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "price", [](json_t& args) { args["price"] = -1; }, "below-minimum" },
+                    { "price", [](json_t& args) { args["price"] = kRideMaxPrice + 1; }, "above-maximum" },
+                    { "isPrimaryPrice", [](json_t& args) { args["isPrimaryPrice"] = false; }, "secondary-price-legal", true },
+                };
+                fixture.acceptedCases = {
+                    { "primary-price", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "price", 1 }, { "isPrimaryPrice", true } }; }, {} },
+                    { "secondary-price", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "price", 1 }, { "isPrimaryPrice", false } }; }, {} },
+                };
+                fixture.staleStateCases = {
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
+                    { "unloaded-ride-object", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->subtype = kObjectEntryIndexNull;
+                     } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
-                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideSetPriceAction>(
                         RideId::FromUnderlying(args.at("ride").get<uint16_t>()), args.at("price").get<money64>(),
@@ -649,14 +922,45 @@ namespace
                 fixture.untrustedParameters = { "ride", "status" };
                 fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
-                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "status", 0 } }; };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "status", 2 } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "status", [](json_t& args) { args["status"] = 255; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "status", [](json_t& args) { args["status"] = 255; }, "status-domain" },
+                };
+                fixture.staleStateCases = {
+                    { "open-test-simulate-topology", [values](GameState_t& state, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                         {
+                             ride->status = RideStatus::open;
+                             ride->type = kRideTypeNull;
+                             bool removed = false;
+                             for (int32_t x = 0; x < state.mapSize.x && !removed; ++x)
+                             {
+                                 for (int32_t y = 0; y < state.mapSize.y && !removed; ++y)
+                                 {
+                                     auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                                     while (element != nullptr)
+                                     {
+                                         if (element->getType() == TileElementType::Track
+                                             && element->asTrack()->GetRideIndex() == values->ride)
+                                         {
+                                             TileElementRemove(element);
+                                             removed = true;
+                                             break;
+                                         }
+                                         if (element->isLastForTile())
+                                             break;
+                                         ++element;
+                                     }
+                                 }
+                             }
+                         }
+                     } },
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
-                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideSetStatusAction>(
                         RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
@@ -676,9 +980,9 @@ namespace
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
                 fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 100 } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "type", [](json_t& args) { args["type"] = 255; } },
-                    { "value", [](json_t& args) { args["value"] = 0; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "type", [](json_t& args) { args["type"] = 255; }, "rating-type-domain" },
+                    { "value", [](json_t& args) { args["value"] = 0; }, "rating-value-domain" },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
                 fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
@@ -701,20 +1005,48 @@ namespace
                 fixture.untrustedParameters = { "ride", "type", "value", "index" };
                 fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
-                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "index", 0 } }; };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 7 }, { "value", values->entranceObject }, { "index", 0 } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "type", [](json_t& args) { args["type"] = 255; } },
-                    { "value", [](json_t& args) { args["value"] = 65535; } },
-                    { "value", [](json_t& args) {
-                         args["type"] = static_cast<uint8_t>(GameActions::RideSetAppearanceType::entranceStyle);
-                         args["value"] = 254;
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "type", [](json_t& args) { args["type"] = 255; }, "invalid-type" },
+                    { "value", [](json_t& args) { args["type"] = 0; args["value"] = 255; }, "track-main-colour" },
+                    { "value", [](json_t& args) { args["type"] = 3; args["value"] = 255; }, "vehicle-body-colour" },
+                    { "value", [](json_t& args) { args["type"] = 6; args["value"] = 255; }, "vehicle-colour-scheme" },
+                    { "value", [](json_t& args) { args["type"] = 7; args["value"] = 254; }, "entrance-object-identity" },
+                    { "value", [](json_t& args) { args["type"] = 8; args["value"] = 2; }, "random-colour-boolean" },
+                    { "index", [](json_t& args) { args["type"] = 0; args["value"] = 1; args["index"] = 255; }, "appearance-index" },
+                };
+                fixture.acceptedCases = {
+                    { "track-main", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "index", 0 } }; }, {} },
+                    { "track-additional", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 1 }, { "value", 2 }, { "index", 0 } }; }, {} },
+                    { "track-supports", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 2 }, { "value", 3 }, { "index", 0 } }; }, {} },
+                    { "vehicle-body", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 3 }, { "value", 1 }, { "index", 0 } }; }, {} },
+                    { "vehicle-trim", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 4 }, { "value", 2 }, { "index", 0 } }; }, {} },
+                    { "vehicle-tertiary", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 5 }, { "value", 3 }, { "index", 0 } }; }, {} },
+                    { "vehicle-scheme", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 6 }, { "value", 1 }, { "index", 0 } }; }, {} },
+                    { "entrance-style", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 7 }, { "value", values->entranceObject }, { "index", 0 } }; }, {} },
+                    { "random-colour-false", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 8 }, { "value", 0 }, { "index", 0 } }; }, {} },
+                    { "random-colour-true", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 8 }, { "value", 1 }, { "index", 0 } }; }, {} },
+                };
+                fixture.staleStateCases = {
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
+                    { "non-applicable-entrance", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                         {
+                             for (ride_type_t type = 0; type < RIDE_TYPE_COUNT; ++type)
+                             {
+                                 if (!GetRideTypeDescriptor(type).flags.has(RtdFlag::hasEntranceAndExit))
+                                 {
+                                     ride->type = type;
+                                     break;
+                                 }
+                             }
+                         }
                      } },
-                    { "index", [](json_t& args) { args["index"] = 255; } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
-                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideSetAppearanceAction>(
                         RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
@@ -735,18 +1067,49 @@ namespace
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
                 fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "colour", 0 } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "type", [](json_t& args) { args["type"] = 255; } },
-                    { "value", [](json_t& args) { args["value"] = 0; } },
-                    { "colour", [](json_t& args) {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "type", [](json_t& args) { args["type"] = 255; }, "invalid-type" },
+                    { "value", [](json_t& args) { args["type"] = 0; args["value"] = 0; }, "num-trains-zero" },
+                    { "value", [](json_t& args) { args["type"] = 1; args["value"] = 0; }, "cars-per-train-zero" },
+                    { "value", [](json_t& args) { args["type"] = 1; args["value"] = 255; }, "cars-per-train-descriptor-bound" },
+                    { "value", [](json_t& args) { args["type"] = 2; args["value"] = 65535; }, "ride-entry-identity" },
+                    { "value", [](json_t& args) { args["type"] = 3; args["value"] = 2; }, "reversed-trains-domain" },
+                    { "colour", [values](json_t& args) {
                          args["type"] = 2;
-                         args["value"] = 65535;
+                         args["value"] = values->rideObject;
                          args["colour"] = 254;
-                     } },
+                     }, "loaded-entry-colour-preset", false,
+                      [](GameState_t& state, const json_t&) { state.cheats.ignoreResearchStatus = true; } },
+                    { "value", [](json_t& args) { args["type"] = 1; args["value"] = 0; }, "cars-cheat-storage-zero",
+                      false, [](GameState_t& state, const json_t&) { state.cheats.disableTrainLengthLimit = true; } },
+                };
+                fixture.acceptedCases = {
+                    { "num-trains", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "colour", 0 } }; }, {} },
+                    { "cars-per-train", [values] {
+                         const auto* entry = GetRideEntryByIndex(values->rideObject);
+                         return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 1 },
+                             { "value", entry == nullptr ? 1 : entry->min_cars_in_train }, { "colour", 0 } };
+                     }, {} },
+                    { "ride-entry", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 2 }, { "value", values->rideObject }, { "colour", 0 } }; },
+                      [](GameState_t& state, const json_t&) { state.cheats.ignoreResearchStatus = true; } },
+                    { "reversed-trains", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 3 }, { "value", 1 }, { "colour", 0 } }; }, {} },
+                    { "cars-per-train-cheat", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 1 }, { "value", 255 }, { "colour", 0 } }; },
+                      [](GameState_t& state, const json_t&) { state.cheats.disableTrainLengthLimit = true; } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
-                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.staleStateCases = {
+                    { "broken-ride", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->flags.set(RideFlag::brokenDown);
+                     } },
+                    { "open-ride", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->status = RideStatus::open;
+                     } },
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
+                };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return VehicleActionProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return VehicleActionProjection(state, args); };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideSetVehicleAction>(
                         RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
@@ -765,15 +1128,63 @@ namespace
                 fixture.untrustedParameters = { "ride", "setting", "value" };
                 fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
-                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 2 }, { "value", 10 } }; };
+                fixture.legalArgs = [values] {
+                    const auto* ride = GetRide(values->ride);
+                    return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 0 },
+                        { "value", ride == nullptr ? 0 : static_cast<uint8_t>(ride->mode) } };
+                };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "setting", [](json_t& args) { args["setting"] = 255; } },
-                    { "value", [](json_t& args) { args["value"] = 251; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "setting", [](json_t& args) { args["setting"] = 255; }, "invalid-setting" },
+                    { "value", [](json_t& args) { args["setting"] = 0; args["value"] = 255; }, "mode-domain" },
+                    { "value", [](json_t& args) { args["setting"] = 2; args["value"] = 251; }, "minimum-wait-bound" },
+                    { "value", [](json_t& args) { args["setting"] = 3; args["value"] = 251; }, "maximum-wait-bound" },
+                    { "value", [](json_t& args) { args["setting"] = 4; args["value"] = 255; }, "operation-descriptor-bound" },
+                    { "value", [](json_t& args) { args["setting"] = 5; args["value"] = 255; }, "inspection-domain" },
+                    { "value", [](json_t& args) { args["setting"] = 6; args["value"] = 2; }, "music-boolean" },
+                    { "value", [](json_t& args) { args["setting"] = 7; args["value"] = 255; }, "music-object-identity" },
+                    { "value", [](json_t& args) { args["setting"] = 8; args["value"] = 255; }, "lift-hill-descriptor-bound" },
+                    { "value", [](json_t& args) { args["setting"] = 9; args["value"] = 255; }, "circuit-cable-lift-bound" },
+                    { "value", [](json_t& args) { args["setting"] = 10; args["value"] = 255; }, "ride-type-domain" },
+                    { "value", [](json_t& args) { args["setting"] = 1; args["value"] = 255; }, "departure-value-domain", true },
+                };
+                fixture.acceptedCases = {
+                    { "mode", [values] {
+                         const auto* ride = GetRide(values->ride);
+                         return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 0 },
+                             { "value", ride == nullptr ? 0 : static_cast<uint8_t>(ride->mode) } };
+                     }, {} },
+                    { "departure", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 1 }, { "value", 255 } }; }, {} },
+                    { "minimum-wait", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 2 }, { "value", 10 } }; }, {} },
+                    { "maximum-wait", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 3 }, { "value", 20 } }; }, {} },
+                    { "operation", [values] {
+                         const auto* ride = GetRide(values->ride);
+                         return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 4 },
+                             { "value", ride == nullptr ? 0 : ride->operationOption } };
+                     }, {} },
+                    { "inspection", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 5 }, { "value", 0 } }; }, {} },
+                    { "music-off", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 6 }, { "value", 0 } }; }, {} },
+                    { "music-on", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 6 }, { "value", 1 } }; }, {} },
+                    { "music-object", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 7 }, { "value", GetRide(values->ride) == nullptr ? 0 : GetRide(values->ride)->music } }; }, {} },
+                    { "lift-hill", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 8 }, { "value", GetRide(values->ride) == nullptr ? 0 : GetRide(values->ride)->liftHillSpeed } }; }, {} },
+                    { "circuits", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 9 }, { "value", 1 } }; }, {} },
+                    { "ride-type-cheat", [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 10 }, { "value", GetRide(values->ride) == nullptr ? 0 : GetRide(values->ride)->type } }; },
+                      [](GameState_t& state, const json_t&) { state.cheats.allowArbitraryRideTypeChanges = true; } },
+                };
+                fixture.staleStateCases = {
+                    { "broken-operating-ride", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->flags.set(RideFlag::brokenDown);
+                     } },
+                    { "open-operating-ride", [values](GameState_t&, const json_t&) {
+                         if (auto* ride = GetRide(values->ride); ride != nullptr)
+                             ride->status = RideStatus::open;
+                     } },
+                    { "deleted-ride", [values](GameState_t&, const json_t&) { RideDelete(values->ride); } },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
-                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
-                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return ExactRideActionProjection(state, args); };
                 fixture.makeOrdinaryAction = [](const json_t& args) {
                     return std::make_unique<GameActions::RideSetSettingAction>(
                         RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
@@ -794,8 +1205,8 @@ namespace
                 fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
                 fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "visiblity", 1 } }; };
                 fixture.semanticInvalidPartitions = {
-                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                    { "visiblity", [](json_t& args) { args["visiblity"] = 2; } },
+                    { "ride", [](json_t& args) { args["ride"] = 65535; }, "missing-ride" },
+                    { "visiblity", [](json_t& args) { args["visiblity"] = 2; }, "visibility-domain" },
                 };
                 fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
                 fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return TrackProjection(state, args); };
@@ -946,10 +1357,46 @@ namespace
                 failure = "fixture has no semantic parameter partitions";
                 return false;
             }
-            std::set<std::string> parameters(fixture.untrustedParameters.begin(), fixture.untrustedParameters.end());
+            // The engine descriptor is the source of truth for the public
+            // parameter census.  The declaration is checked against it, never
+            // used as a substitute for it (this catches omitted fields such as
+            // isPrimaryPrice).
+            const auto descriptorParameters = DescriptorParameters(*descriptor);
+            const std::set<std::string> declaredParameters(
+                fixture.untrustedParameters.begin(), fixture.untrustedParameters.end());
+            if (descriptorParameters != declaredParameters)
+            {
+                failure = "fixture parameter census differs from native descriptor: descriptor="
+                    + json_t(descriptorParameters).dump() + " fixture=" + json_t(declaredParameters).dump();
+                return false;
+            }
+            const auto& parameters = descriptorParameters;
             std::set<std::string> partitions;
+            std::set<std::string> partitionCases;
+            size_t partitionIndex = 0;
             for (const auto& partition : fixture.semanticInvalidPartitions)
+            {
+                if (partition.parameter.empty())
+                {
+                    failure = "semantic partition has no parameter";
+                    return false;
+                }
+                const auto caseName = partition.caseName.empty()
+                    ? partition.parameter + "#" + std::to_string(partitionIndex)
+                    : partition.caseName;
+                if (!parameters.contains(partition.parameter))
+                {
+                    failure = "semantic partition names a parameter absent from the descriptor: " + partition.parameter;
+                    return false;
+                }
+                if (!partitionCases.insert(caseName).second)
+                {
+                    failure = "duplicate semantic partition case: " + caseName;
+                    return false;
+                }
                 partitions.insert(partition.parameter);
+                ++partitionIndex;
+            }
             for (const auto& parameter : parameters)
             {
                 if (!partitions.contains(parameter))
@@ -978,10 +1425,27 @@ namespace
                     return false;
                 }
                 partition.makeInvalid(args);
+                if (partition.prepareState)
+                    partition.prepareState(state, args);
                 const auto queried = QueryNativeAction(fixture.registration, args, state);
+                if (partition.expectAccepted)
+                {
+                    if (!queried.ok || !queried.value.value("accepted", false))
+                    {
+                        failure = "legal discriminated partition was rejected: " + partition.caseName;
+                        return false;
+                    }
+                    const auto executed = ExecuteNativeAction(fixture.registration, args, state);
+                    if (!executed.ok || !executed.value.value("accepted", false))
+                    {
+                        failure = "legal discriminated partition did not execute: " + partition.caseName;
+                        return false;
+                    }
+                    continue;
+                }
                 if (!queried.ok || queried.value.value("accepted", true))
                 {
-                    failure = "semantic invalid partition was accepted: " + partition.parameter;
+                    failure = "semantic invalid partition was accepted: " + partition.caseName;
                     return false;
                 }
                 const auto before = fixture.rejectionProjection(state, args);
@@ -1003,96 +1467,122 @@ namespace
                 }
             }
 
-            // A successful query is intentionally made stale by the owner-state
-            // mutator. Public execution must query again rather than trusting it.
-            LoadPark("small_park_with_ferris_wheel.sv6");
-            auto& staleState = OpenRCT2::getGameState();
-            fixture.prepareLegalState(staleState);
-            const auto staleArgs = fixture.legalArgs();
-            const auto staleQuery = QueryNativeAction(fixture.registration, staleArgs, staleState);
-            if (!staleQuery.ok || !staleQuery.value.value("accepted", false))
+            // A successful query is intentionally made stale by every declared
+            // owner-state mutator. Public execution must query again rather than
+            // trusting a cached result. A single deleted-ride witness is not a
+            // substitute for duplicate-name, topology, object, research, cheat
+            // or renewal preconditions.
+            std::vector<StaleStateCase> staleCases = fixture.staleStateCases;
+            if (staleCases.empty())
+                staleCases.push_back({ "default-owner-state", fixture.mutateRelevantState });
+            for (const auto& staleCase : staleCases)
             {
-                failure = "legal fixture query did not accept before stale-state mutation args=" + staleArgs.dump() + " result=" + staleQuery.value.dump();
-                return false;
-            }
-            fixture.mutateRelevantState(staleState, staleArgs);
-            const auto staleBefore = fixture.rejectionProjection(staleState, staleArgs);
-            const auto staleExecution = ExecuteNativeAction(fixture.registration, staleArgs, staleState);
-            if (!staleExecution.ok || staleExecution.value.value("accepted", true))
-            {
-                failure = "execution did not perform a fresh query after relevant-state mutation";
-                return false;
-            }
-            if (staleBefore.empty() || staleBefore != fixture.rejectionProjection(staleState, staleArgs))
-            {
-                failure = "stale-query rejection mutated the declared projection";
-                return false;
-            }
-
-            // Independent fresh states are used for ordinary and synchronous-public
-            // accepted execution. Only the paused transport omissions are excluded.
-            LoadPark("small_park_with_ferris_wheel.sv6");
-            auto& ordinaryState = OpenRCT2::getGameState();
-            fixture.prepareLegalState(ordinaryState);
-            const auto ordinaryArgs = fixture.legalArgs();
-            const auto ordinaryBefore = ordinaryState.park.cash;
-            auto ordinaryAction = fixture.makeOrdinaryAction(ordinaryArgs);
-            ordinaryAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
-            const auto oldInUpdateCode = gInUpdateCode;
-            gInUpdateCode = true;
-            const auto ordinaryResult = GameActions::Execute(ordinaryAction.get(), ordinaryState);
-            gInUpdateCode = oldInUpdateCode;
-            if (ordinaryResult.error != GameActions::Status::ok)
-            {
-                failure = "ordinary execution rejected legal fixture";
-                return false;
-            }
-            const auto ordinaryCashDelta = ordinaryState.park.cash - ordinaryBefore;
-            const auto ordinaryPost = fixture.acceptedPostStateProjection(ordinaryState, ordinaryArgs);
-            if (ordinaryPost.empty())
-            {
-                failure = "accepted post-state projection is empty";
-                return false;
+                LoadPark("small_park_with_ferris_wheel.sv6");
+                auto& staleState = OpenRCT2::getGameState();
+                fixture.prepareLegalState(staleState);
+                const auto staleArgs = fixture.legalArgs();
+                const auto staleQuery = QueryNativeAction(fixture.registration, staleArgs, staleState);
+                if (!staleQuery.ok || !staleQuery.value.value("accepted", false))
+                {
+                    failure = "legal fixture query did not accept before stale-state mutation case="
+                        + staleCase.name + " args=" + staleArgs.dump() + " result=" + staleQuery.value.dump();
+                    return false;
+                }
+                staleCase.mutate(staleState, staleArgs);
+                const auto staleBefore = fixture.rejectionProjection(staleState, staleArgs);
+                const auto staleExecution = ExecuteNativeAction(fixture.registration, staleArgs, staleState);
+                if (!staleExecution.ok || staleExecution.value.value("accepted", true))
+                {
+                    failure = "execution did not perform a fresh query after stale-state mutation: " + staleCase.name;
+                    return false;
+                }
+                if (staleBefore.empty() || staleBefore != fixture.rejectionProjection(staleState, staleArgs))
+                {
+                    failure = "stale-query rejection mutated the declared projection: " + staleCase.name;
+                    return false;
+                }
             }
 
-            LoadPark("small_park_with_ferris_wheel.sv6");
-            auto& publicState = OpenRCT2::getGameState();
-            fixture.prepareLegalState(publicState);
-            const auto publicArgs = fixture.legalArgs();
-            const auto publicBefore = publicState.park.cash;
-            const auto publicQuery = QueryNativeAction(fixture.registration, publicArgs, publicState);
-            if (!publicQuery.ok || !publicQuery.value.value("accepted", false))
+            // Independent fresh states are used for every accepted discriminated
+            // case, not just the first enum value. Only the paused transport
+            // omissions are excluded from parity.
+            std::vector<AcceptedFixtureCase> acceptedCases = fixture.acceptedCases;
+            if (acceptedCases.empty())
+                acceptedCases.push_back({ "default", fixture.legalArgs, {} });
+            for (const auto& acceptedCase : acceptedCases)
             {
-                failure = "public query rejected legal fixture";
-                return false;
-            }
-            const auto publicExecution = ExecuteNativeAction(fixture.registration, publicArgs, publicState);
-            if (!publicExecution.ok || !publicExecution.value.value("accepted", false))
-            {
-                failure = "public synchronous execution rejected legal fixture";
-                return false;
-            }
-            const json_t ordinaryPosition{
-                { "x", ordinaryResult.position.x },
-                { "y", ordinaryResult.position.y },
-                { "z", ordinaryResult.position.z },
-            };
-            if (publicExecution.value["status"] != static_cast<uint16_t>(ordinaryResult.error)
-                || publicExecution.value["cost"] != ordinaryResult.cost
-                || publicExecution.value["position"] != ordinaryPosition)
-            {
-                failure = "ordinary and public result/status/cost/position diverged";
-                return false;
-            }
-            if (publicState.park.cash - publicBefore != ordinaryCashDelta)
-            {
-                failure = "ordinary and public finance delta diverged";
-                return false;
-            }
-            if (ordinaryPost != fixture.acceptedPostStateProjection(publicState, publicArgs))
-            {
-                failure = "ordinary and public accepted post-state diverged";
-                return false;
+                LoadPark("small_park_with_ferris_wheel.sv6");
+                auto& ordinaryState = OpenRCT2::getGameState();
+                fixture.prepareLegalState(ordinaryState);
+                const auto ordinaryArgs = acceptedCase.args();
+                if (acceptedCase.prepareState)
+                    acceptedCase.prepareState(ordinaryState, ordinaryArgs);
+                if (ordinaryArgs.empty())
+                {
+                    failure = "accepted case has empty args: " + acceptedCase.name;
+                    return false;
+                }
+                const auto ordinaryBefore = ordinaryState.park.cash;
+                auto ordinaryAction = fixture.makeOrdinaryAction(ordinaryArgs);
+                ordinaryAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+                const auto oldInUpdateCode = gInUpdateCode;
+                gInUpdateCode = true;
+                const auto ordinaryResult = GameActions::Execute(ordinaryAction.get(), ordinaryState);
+                gInUpdateCode = oldInUpdateCode;
+                if (ordinaryResult.error != GameActions::Status::ok)
+                {
+                    failure = "ordinary execution rejected accepted case: " + acceptedCase.name;
+                    return false;
+                }
+                const auto ordinaryCashDelta = ordinaryState.park.cash - ordinaryBefore;
+                const auto ordinaryPost = fixture.acceptedPostStateProjection(ordinaryState, ordinaryArgs);
+                if (ordinaryPost.empty())
+                {
+                    failure = "accepted post-state projection is empty: " + acceptedCase.name;
+                    return false;
+                }
+
+                LoadPark("small_park_with_ferris_wheel.sv6");
+                auto& publicState = OpenRCT2::getGameState();
+                fixture.prepareLegalState(publicState);
+                const auto publicArgs = acceptedCase.args();
+                if (acceptedCase.prepareState)
+                    acceptedCase.prepareState(publicState, publicArgs);
+                const auto publicBefore = publicState.park.cash;
+                const auto publicQuery = QueryNativeAction(fixture.registration, publicArgs, publicState);
+                if (!publicQuery.ok || !publicQuery.value.value("accepted", false))
+                {
+                    failure = "public query rejected accepted case: " + acceptedCase.name;
+                    return false;
+                }
+                const auto publicExecution = ExecuteNativeAction(fixture.registration, publicArgs, publicState);
+                if (!publicExecution.ok || !publicExecution.value.value("accepted", false))
+                {
+                    failure = "public synchronous execution rejected accepted case: " + acceptedCase.name;
+                    return false;
+                }
+                const json_t ordinaryPosition{
+                    { "x", ordinaryResult.position.x },
+                    { "y", ordinaryResult.position.y },
+                    { "z", ordinaryResult.position.z },
+                };
+                if (publicExecution.value["status"] != static_cast<uint16_t>(ordinaryResult.error)
+                    || publicExecution.value["cost"] != ordinaryResult.cost
+                    || publicExecution.value["position"] != ordinaryPosition)
+                {
+                    failure = "ordinary and public result/status/cost/position diverged: " + acceptedCase.name;
+                    return false;
+                }
+                if (publicState.park.cash - publicBefore != ordinaryCashDelta)
+                {
+                    failure = "ordinary and public finance delta diverged: " + acceptedCase.name;
+                    return false;
+                }
+                if (ordinaryPost != fixture.acceptedPostStateProjection(publicState, publicArgs))
+                {
+                    failure = "ordinary and public accepted post-state diverged: " + acceptedCase.name;
+                    return false;
+                }
             }
             return true;
         }
@@ -1307,4 +1797,44 @@ TEST(NativeActionContractHarnessMutations, UncoveredSemanticParameterRed)
     observation.semanticPartitions = { "x" };
     const auto failure = ValidateHarnessObservation(observation);
     EXPECT_NE(failure.find("uncovered semantic parameter: ride"), std::string::npos);
+}
+
+TEST(NativeActionContractHarnessMutations, DescriptorCensusRed)
+{
+    auto observation = HarnessObservation{};
+    observation.descriptorCensusParity = false;
+    const auto failure = ValidateHarnessObservation(observation);
+    EXPECT_NE(failure.find("descriptor"), std::string::npos);
+}
+
+TEST(NativeActionContractHarnessMutations, CoupledPartitionRed)
+{
+    auto observation = HarnessObservation{};
+    observation.independentPartitionCoverage = false;
+    const auto failure = ValidateHarnessObservation(observation);
+    EXPECT_NE(failure.find("coupled"), std::string::npos);
+}
+
+TEST(NativeActionContractHarnessMutations, MissingStalePredicateRed)
+{
+    auto observation = HarnessObservation{};
+    observation.stalePredicateCoverage = false;
+    const auto failure = ValidateHarnessObservation(observation);
+    EXPECT_NE(failure.find("stale-query"), std::string::npos);
+}
+
+TEST(NativeActionContractHarnessMutations, IncompleteActionProjectionRed)
+{
+    auto observation = HarnessObservation{};
+    observation.actionSpecificProjection = false;
+    const auto failure = ValidateHarnessObservation(observation);
+    EXPECT_NE(failure.find("projection"), std::string::npos);
+}
+
+TEST(NativeActionContractHarnessMutations, CheatDomainRed)
+{
+    auto observation = HarnessObservation{};
+    observation.cheatDomainParity = false;
+    const auto failure = ValidateHarnessObservation(observation);
+    EXPECT_NE(failure.find("cheat"), std::string::npos);
 }

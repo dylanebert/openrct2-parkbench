@@ -23,6 +23,8 @@
 #include "../../windows/Intent.h"
 #include "../../world/Map.h"
 
+#include <limits>
+
 namespace OpenRCT2::GameActions
 {
     constexpr static StringId kSetVehicleTypeErrorTitle[] = {
@@ -96,7 +98,14 @@ namespace OpenRCT2::GameActions
             case RideSetVehicleType::numCarsPerTrain:
             {
                 const auto* rideEntry = GetRideEntryByIndex(ride->subtype);
-                if (rideEntry == nullptr || _value < rideEntry->min_cars_in_train || _value > rideEntry->max_cars_in_train)
+                // The UI deliberately exposes the extended train-length path
+                // while this cheat is enabled. Keep descriptor bounds for
+                // ordinary play, but retain the actual byte/storage and engine
+                // safety bounds when the cheat owns the wider domain.
+                const bool outsideStorageBounds = _value == 0 || _value > std::numeric_limits<uint8_t>::max();
+                const bool outsideDescriptorBounds = rideEntry == nullptr
+                    || _value < rideEntry->min_cars_in_train || _value > rideEntry->max_cars_in_train;
+                if (outsideStorageBounds || (!gameState.cheats.disableTrainLengthLimit && outsideDescriptorBounds))
                 {
                     return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
                 }
