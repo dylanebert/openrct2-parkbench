@@ -11,10 +11,11 @@
 
 #include "../Version.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cerrno>
 #include <cstring>
 #include <limits>
-#include <nlohmann/json.hpp>
 #include <utility>
 
 #ifdef _WIN32
@@ -114,7 +115,7 @@ namespace OpenRCT2::CommandLine
         {
             return std::string(code) + ": " + std::string(message);
         }
-    } // namespace
+    }
 
     NativeMonitor::NativeMonitor(int descriptor)
         : _descriptor(descriptor)
@@ -196,12 +197,9 @@ namespace OpenRCT2::CommandLine
         greeting["version"] = kProtocolVersion;
         greeting["maxFrameBytes"] = kMaxFrameBytes;
         greeting["capabilities"] = json_t{
-            "ping",          "status",         "step",
-            "stop",          "resource.list",  "resource.describe",
-            "resource.read", "action.list",    "action.describe",
-            "action.query",  "action.execute", "save",
-            "record.start",  "record.status",  "record.stop",
-            "capture",
+            "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
+            "action.list", "action.describe", "action.query", "action.execute", "save",
+            "record.start", "record.status", "record.stop", "capture",
         };
         greeting["engine"] = json_t::object();
         greeting["engine"]["version"] = std::string(gVersionInfoFull);
@@ -262,11 +260,12 @@ namespace OpenRCT2::CommandLine
             return false;
         }
         request.method = method->get<std::string>();
-        if (request.method != "ping" && request.method != "status" && request.method != "step" && request.method != "stop"
-            && request.method != "resource.list" && request.method != "resource.describe" && request.method != "resource.read"
-            && request.method != "action.list" && request.method != "action.describe" && request.method != "action.query"
-            && request.method != "action.execute" && request.method != "save" && request.method != "record.start"
-            && request.method != "record.status" && request.method != "record.stop" && request.method != "capture")
+        if (request.method != "ping" && request.method != "status" && request.method != "step"
+            && request.method != "stop" && request.method != "resource.list" && request.method != "resource.describe"
+            && request.method != "resource.read" && request.method != "action.list" && request.method != "action.describe"
+            && request.method != "action.query" && request.method != "action.execute" && request.method != "save"
+            && request.method != "record.start" && request.method != "record.status" && request.method != "record.stop"
+            && request.method != "capture")
         {
             code = "unknown_method";
             message = "monitor method is not advertised";
@@ -319,8 +318,8 @@ namespace OpenRCT2::CommandLine
     }
 
     bool NativeMonitor::SendError(
-        uint64_t id, uint64_t sequence, uint32_t tick, bool paused, std::string_view code, std::string_view message,
-        const json_t& detail)
+        uint64_t id, uint64_t sequence, uint32_t tick, bool paused, std::string_view code,
+        std::string_view message, const json_t& detail)
     {
         json_t response = StateFields(sequence, tick, paused);
         response["type"] = "response";
@@ -373,8 +372,9 @@ namespace OpenRCT2::CommandLine
             uint8_t header[4]{};
             if (!ReadExact(_descriptor, header, sizeof(header)))
                 break;
-            const uint32_t length = (static_cast<uint32_t>(header[0]) << 24) | (static_cast<uint32_t>(header[1]) << 16)
-                | (static_cast<uint32_t>(header[2]) << 8) | static_cast<uint32_t>(header[3]);
+            const uint32_t length = (static_cast<uint32_t>(header[0]) << 24)
+                | (static_cast<uint32_t>(header[1]) << 16) | (static_cast<uint32_t>(header[2]) << 8)
+                | static_cast<uint32_t>(header[3]);
             if (length == 0 || length > kMaxFrameBytes)
             {
                 SendError(0, 0, 0, true, "frame_bounds", "request frame exceeds the bounded payload size");
@@ -404,4 +404,4 @@ namespace OpenRCT2::CommandLine
         }
         MarkLost();
     }
-} // namespace OpenRCT2::CommandLine
+}

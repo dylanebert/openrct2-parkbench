@@ -5,13 +5,14 @@
 /* OpenRCT2 is licensed under the GNU General Public License version 3.      */
 /*****************************************************************************/
 
-#include <array>
 #include <gtest/gtest.h>
+
+#include <array>
+#include <utility>
 #include <openrct2/OpenRCT2.h>
-#include <openrct2/SpriteIds.h>
 #include <openrct2/drawing/Drawing.Sprite.h>
 #include <openrct2/paint/RideRenderDiagnostic.h>
-#include <utility>
+#include <openrct2/SpriteIds.h>
 
 using namespace OpenRCT2;
 

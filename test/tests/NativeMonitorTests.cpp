@@ -7,13 +7,15 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 
-#include <chrono>
-#include <cstring>
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
 #include <openrct2/Game.h>
 #include <openrct2/GameState.h>
 #include <openrct2/command_line/NativeMonitor.h>
+
+#include <nlohmann/json.hpp>
+
+#include <chrono>
+#include <cstring>
 #include <thread>
 
 #ifndef _WIN32
@@ -42,10 +44,9 @@ TEST(NativeMonitorProtocol, FrameBoundsAndGreetingAreBounded)
     EXPECT_TRUE(greeting["paused"]);
     EXPECT_EQ(
         greeting["capabilities"],
-        json_t(
-            { "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read", "action.list",
-              "action.describe", "action.query", "action.execute", "save", "record.start", "record.status", "record.stop",
-              "capture" }));
+        json_t({ "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
+                 "action.list", "action.describe", "action.query", "action.execute", "save",
+                 "record.start", "record.status", "record.stop", "capture" }));
 }
 
 TEST(NativeMonitorProtocol, RequestSchemaPreservesIdsAndStepZero)
@@ -53,15 +54,14 @@ TEST(NativeMonitorProtocol, RequestSchemaPreservesIdsAndStepZero)
     NativeMonitorRequest request;
     std::string code;
     std::string message;
-    ASSERT_TRUE(
-        NativeMonitor::ParseRequest(
-            R"({"type":"request","id":41,"method":"step","params":{"ticks":0}})", request, code, message));
+    ASSERT_TRUE(NativeMonitor::ParseRequest(
+        R"({"type":"request","id":41,"method":"step","params":{"ticks":0}})", request, code, message));
     EXPECT_EQ(request.id, 41u);
     EXPECT_EQ(request.method, "step");
     EXPECT_EQ(request.ticks, 0u);
 
-    ASSERT_TRUE(
-        NativeMonitor::ParseRequest(R"({"type":"request","id":42,"method":"ping","params":{}})", request, code, message));
+    ASSERT_TRUE(NativeMonitor::ParseRequest(
+        R"({"type":"request","id":42,"method":"ping","params":{}})", request, code, message));
     EXPECT_EQ(request.id, 42u);
     EXPECT_EQ(request.method, "ping");
     EXPECT_TRUE(request.params.is_object());
@@ -87,15 +87,14 @@ TEST(NativeMonitorProtocol, InvalidRequestsBecomeStructuredReasons)
     std::string message;
     EXPECT_FALSE(NativeMonitor::ParseRequest("[]", request, code, message));
     EXPECT_EQ(code, "invalid_request");
-    EXPECT_FALSE(
-        NativeMonitor::ParseRequest(
-            R"({"type":"request","id":2,"method":"step","params":{"ticks":1000001}})", request, code, message));
+    EXPECT_FALSE(NativeMonitor::ParseRequest(
+        R"({"type":"request","id":2,"method":"step","params":{"ticks":1000001}})", request, code, message));
     EXPECT_EQ(code, "invalid_ticks");
-    EXPECT_FALSE(NativeMonitor::ParseRequest(R"({"type":"request","id":3,"method":"not-advertised"})", request, code, message));
+    EXPECT_FALSE(NativeMonitor::ParseRequest(
+        R"({"type":"request","id":3,"method":"not-advertised"})", request, code, message));
     EXPECT_EQ(code, "unknown_method");
-    EXPECT_FALSE(
-        NativeMonitor::ParseRequest(
-            R"({"type":"request","id":4,"method":"step","params":{"ticks":true}})", request, code, message));
+    EXPECT_FALSE(NativeMonitor::ParseRequest(
+        R"({"type":"request","id":4,"method":"step","params":{"ticks":true}})", request, code, message));
     EXPECT_EQ(code, "invalid_ticks");
 }
 
@@ -113,8 +112,8 @@ TEST(NativeMonitorProtocol, ResponsesFollowAcceptedRequestOrderAndEofIsLoss)
         EXPECT_EQ(headerSize, 4);
         if (headerSize != 4)
             return json_t::object();
-        const uint32_t length = (static_cast<uint32_t>(header[0]) << 24) | (static_cast<uint32_t>(header[1]) << 16)
-            | (static_cast<uint32_t>(header[2]) << 8) | header[3];
+        const uint32_t length = (static_cast<uint32_t>(header[0]) << 24)
+            | (static_cast<uint32_t>(header[1]) << 16) | (static_cast<uint32_t>(header[2]) << 8) | header[3];
         std::string payload(length, '\0');
         const auto payloadSize = read(descriptor, payload.data(), payload.size());
         EXPECT_EQ(payloadSize, static_cast<ssize_t>(payload.size()));
@@ -126,8 +125,10 @@ TEST(NativeMonitorProtocol, ResponsesFollowAcceptedRequestOrderAndEofIsLoss)
     const auto greeting = readFrame(descriptors[1]);
     EXPECT_EQ(greeting["type"], "greeting");
 
-    const auto requestOne = NativeMonitor::EncodeFrame(R"({"type":"request","id":9,"method":"ping","params":{}})");
-    const auto requestTwo = NativeMonitor::EncodeFrame(R"({"type":"request","id":10,"method":"status","params":{}})");
+    const auto requestOne = NativeMonitor::EncodeFrame(
+        R"({"type":"request","id":9,"method":"ping","params":{}})");
+    const auto requestTwo = NativeMonitor::EncodeFrame(
+        R"({"type":"request","id":10,"method":"status","params":{}})");
     ASSERT_EQ(write(descriptors[1], requestOne.data(), requestOne.size()), static_cast<ssize_t>(requestOne.size()));
 
     std::optional<NativeMonitorRequest> received;

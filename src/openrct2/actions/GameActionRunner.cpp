@@ -259,7 +259,8 @@ namespace OpenRCT2::GameActions
         Network::AppendServerLog(text);
     }
 
-    static Result ExecuteInternal(const GameAction* action, GameState_t& gameState, bool topLevel, bool synchronous = false)
+    static Result ExecuteInternal(
+        const GameAction* action, GameState_t& gameState, bool topLevel, bool synchronous = false)
     {
         Guard::ArgumentNotNull(action);
 

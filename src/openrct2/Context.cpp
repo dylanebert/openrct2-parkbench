@@ -32,13 +32,13 @@
 #include "command_line/NativeMonitor.h"
 #include "command_line/NativeRegistry.h"
 #include "config/Config.h"
+#include "core/Json.hpp"
 #include "core/Console.hpp"
 #include "core/File.h"
 #include "core/FileScanner.h"
 #include "core/FileStream.h"
 #include "core/Guard.hpp"
 #include "core/Http.h"
-#include "core/Json.hpp"
 #include "core/MemoryStream.h"
 #include "core/Path.hpp"
 #include "core/String.hpp"
@@ -1059,7 +1059,9 @@ namespace OpenRCT2
             const auto pausedBefore = GameIsPaused();
             if (request->method == "ping")
             {
-                _nativeMonitor->SendSuccess(request->id, sequence, tickBefore, pausedBefore, json_t{ { "pong", true } });
+                _nativeMonitor->SendSuccess(
+                    request->id, sequence, tickBefore, pausedBefore,
+                    json_t{ { "pong", true } });
                 return;
             }
             if (request->method == "status")
@@ -1079,7 +1081,8 @@ namespace OpenRCT2
                 {
                     _nativeMonitor->SendError(
                         request->id, sequence, tickBefore, pausedBefore, "paused_required",
-                        "step is only accepted while the engine is paused", json_t{ { "requested", request->ticks } });
+                        "step is only accepted while the engine is paused",
+                        json_t{ { "requested", request->ticks } });
                     return;
                 }
                 if (!gameStateAdvancePausedNativeMonitor(request->ticks))
@@ -1126,8 +1129,8 @@ namespace OpenRCT2
                     }
                 }
                 _nativeMonitor->SendError(
-                    request->id, sequence, tickBefore, pausedBefore, "unknown_resource", "native resource is not registered",
-                    { { "name", name } });
+                    request->id, sequence, tickBefore, pausedBefore, "unknown_resource",
+                    "native resource is not registered", { { "name", name } });
                 return;
             }
             if (request->method == "resource.read")
@@ -1142,8 +1145,7 @@ namespace OpenRCT2
                 else
                 {
                     _nativeMonitor->SendError(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(),
-                        dispatch.code.empty() ? "resource_rejected" : dispatch.code,
+                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code.empty() ? "resource_rejected" : dispatch.code,
                         dispatch.message.empty() ? "resource read was rejected" : dispatch.message,
                         dispatch.ok ? dispatch.value : dispatch.detail);
                 }
@@ -1171,8 +1173,8 @@ namespace OpenRCT2
                     }
                 }
                 _nativeMonitor->SendError(
-                    request->id, sequence, tickBefore, pausedBefore, "unknown_action", "native action is not registered",
-                    { { "name", name } });
+                    request->id, sequence, tickBefore, pausedBefore, "unknown_action",
+                    "native action is not registered", { { "name", name } });
                 return;
             }
             if (request->method == "action.query" || request->method == "action.execute")
@@ -1197,8 +1199,8 @@ namespace OpenRCT2
                 else
                 {
                     _nativeMonitor->SendError(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code, dispatch.message,
-                        dispatch.detail);
+                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code,
+                        dispatch.message, dispatch.detail);
                 }
                 return;
             }
@@ -1207,11 +1209,9 @@ namespace OpenRCT2
                 const auto path = request->params.value("path", "");
                 const auto dispatch = CommandLine::StartNativeRecording(path);
                 if (dispatch.ok)
-                    _nativeMonitor->SendSuccess(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
                 else
-                    _nativeMonitor->SendError(
-                        request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
+                    _nativeMonitor->SendError(request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
                 return;
             }
             if (request->method == "record.status")
@@ -1223,20 +1223,16 @@ namespace OpenRCT2
                     replay->GetCurrentReplayInfo(info);
                 _nativeMonitor->SendSuccess(
                     request->id, sequence, tickBefore, pausedBefore,
-                    json_t{ { "status", active ? "active" : "inactive" },
-                            { "path", active ? info.FilePath : "" },
-                            { "tick", tickBefore } });
+                    json_t{ { "status", active ? "active" : "inactive" }, { "path", active ? info.FilePath : "" }, { "tick", tickBefore } });
                 return;
             }
             if (request->method == "record.stop")
             {
                 const auto dispatch = CommandLine::StopNativeRecording();
                 if (dispatch.ok)
-                    _nativeMonitor->SendSuccess(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
                 else
-                    _nativeMonitor->SendError(
-                        request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
+                    _nativeMonitor->SendError(request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
                 return;
             }
             if (request->method == "capture")
@@ -1253,11 +1249,9 @@ namespace OpenRCT2
                 const auto diagnostic = request->params.value("diagnostic", false);
                 const auto dispatch = CommandLine::CaptureNativeFrame(path, view, diagnostic);
                 if (dispatch.ok)
-                    _nativeMonitor->SendSuccess(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
                 else
-                    _nativeMonitor->SendError(
-                        request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
+                    _nativeMonitor->SendError(request->id, sequence, tickBefore, pausedBefore, dispatch.code, dispatch.message, dispatch.detail);
                 return;
             }
             if (request->method == "save")
@@ -1272,25 +1266,24 @@ namespace OpenRCT2
                 const auto path = request->params.value("path", "");
                 const auto dispatch = CommandLine::SaveNativeGame(path, getGameState());
                 if (dispatch.ok)
-                    _nativeMonitor->SendSuccess(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
                 else
-                    _nativeMonitor->SendError(
-                        request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code, dispatch.message,
-                        dispatch.detail);
+                    _nativeMonitor->SendError(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code, dispatch.message, dispatch.detail);
                 return;
             }
             if (request->method == "stop")
             {
                 const bool sent = _nativeMonitor->SendSuccess(
-                    request->id, sequence, tickBefore, pausedBefore, json_t{ { "stopped", true } });
+                    request->id, sequence, tickBefore, pausedBefore,
+                    json_t{ { "stopped", true } });
                 if (sent)
                     Finish();
                 return;
             }
 
             _nativeMonitor->SendError(
-                request->id, sequence, tickBefore, pausedBefore, "unknown_method", "monitor method is not advertised");
+                request->id, sequence, tickBefore, pausedBefore, "unknown_method",
+                "monitor method is not advertised");
         }
 
         void SwitchToStartUpScene()

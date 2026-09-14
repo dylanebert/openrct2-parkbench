@@ -19,8 +19,8 @@
 #include "../audio/Audio.h"
 #include "../config/Config.h"
 #include "../core/Console.hpp"
-#include "../core/Crypt.h"
 #include "../core/EnumUtils.hpp"
+#include "../core/Crypt.h"
 #include "../core/File.h"
 #include "../core/Imaging.h"
 #include "../core/Path.hpp"
@@ -635,7 +635,8 @@ void CaptureImage(const CaptureOptions& options)
     CaptureImage(options, nullptr, nullptr);
 }
 
-void CaptureImage(const CaptureOptions& options, OpenRCT2::RideRenderDiagnostic* diagnostic, std::string* softwareSurfaceHash)
+void CaptureImage(
+    const CaptureOptions& options, OpenRCT2::RideRenderDiagnostic* diagnostic, std::string* softwareSurfaceHash)
 {
     Viewport viewport{};
     if (options.View.has_value())
