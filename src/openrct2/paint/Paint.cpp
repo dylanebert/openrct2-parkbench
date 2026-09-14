@@ -24,14 +24,14 @@
 #include "../localisation/StringIdType.h"
 #include "../paint/Painter.h"
 #include "../profiling/Profiling.h"
-#include "Boundbox.h"
-#include "Paint.Entity.h"
-#include "tile_element/Paint.TileElement.h"
 #include "../ride/Vehicle.h"
 #include "../world/tile_element/EntranceElement.h"
 #include "../world/tile_element/PathElement.h"
 #include "../world/tile_element/TileElement.h"
 #include "../world/tile_element/TrackElement.h"
+#include "Boundbox.h"
+#include "Paint.Entity.h"
+#include "tile_element/Paint.TileElement.h"
 
 #include <algorithm>
 #include <array>
@@ -1089,9 +1089,8 @@ bool PaintAttachToPreviousAttach(PaintSession& session, const ImageId imageId, i
     ps->DiagnosticSource = previousAttachedPS->DiagnosticSource;
     if (session.RideDiagnostic != nullptr)
     {
-        const auto screenPosition = session.LastPS != nullptr
-            ? session.LastPS->ScreenPos + ScreenCoordsXY{ x, y }
-            : ScreenCoordsXY{};
+        const auto screenPosition = session.LastPS != nullptr ? session.LastPS->ScreenPos + ScreenCoordsXY{ x, y }
+                                                              : ScreenCoordsXY{};
         ps->DiagnosticComponentOrdinal = session.RideDiagnostic->RecordPaint(
             ps->DiagnosticSource, OpenRCT2::RideRenderDiagnostic::Component::attached, imageId, screenPosition);
     }

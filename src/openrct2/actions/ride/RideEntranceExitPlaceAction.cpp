@@ -30,8 +30,7 @@
 namespace OpenRCT2::GameActions
 {
     static bool HasMatchingStationTrack(
-        const CoordsXY& entranceLocation, int16_t baseZ, Direction direction, RideId rideIndex,
-        StationIndex stationNum)
+        const CoordsXY& entranceLocation, int16_t baseZ, Direction direction, RideId rideIndex, StationIndex stationNum)
     {
         const auto trackLocation = entranceLocation + CoordsDirectionDelta[direction];
         auto* tileElement = MapGetFirstElementAt(trackLocation);

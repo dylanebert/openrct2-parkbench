@@ -53,10 +53,8 @@ namespace OpenRCT2
         json_t NativeActionDescriptorJson(const NativeActionDescriptor& descriptor);
 
         NativeDispatchResult ReadNativeResource(std::string_view name, const json_t& args, GameState_t& state);
-        NativeDispatchResult QueryNativeAction(
-            std::string_view name, const json_t& args, GameState_t& state);
-        NativeDispatchResult ExecuteNativeAction(
-            std::string_view name, const json_t& args, GameState_t& state);
+        NativeDispatchResult QueryNativeAction(std::string_view name, const json_t& args, GameState_t& state);
+        NativeDispatchResult ExecuteNativeAction(std::string_view name, const json_t& args, GameState_t& state);
 
         NativeDispatchResult SaveNativeGame(std::string_view path, GameState_t& state);
         bool NativePathContained(std::string_view root, std::string_view path);
@@ -72,5 +70,5 @@ namespace OpenRCT2
             std::string_view path, const json_t& view = json_t(nullptr), bool includeRideRenderDiagnostic = false);
         NativeDispatchResult ValidateNativeCaptureView(const json_t& view, int32_t mapWidth, int32_t mapHeight);
         NativeDispatchResult ValidateNativeCaptureView(const json_t& view, const GameState_t& state);
-    }
-}
+    } // namespace CommandLine
+} // namespace OpenRCT2

@@ -59,7 +59,7 @@ namespace OpenRCT2
     {
         struct RenderTarget;
     }
-}
+} // namespace OpenRCT2
 
 void ScreenshotCheck();
 std::string ScreenshotDump();
@@ -69,5 +69,4 @@ void ScreenshotGiant();
 int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOptions* options);
 
 void CaptureImage(const CaptureOptions& options);
-void CaptureImage(
-    const CaptureOptions& options, OpenRCT2::RideRenderDiagnostic* diagnostic, std::string* softwareSurfaceHash);
+void CaptureImage(const CaptureOptions& options, OpenRCT2::RideRenderDiagnostic* diagnostic, std::string* softwareSurfaceHash);

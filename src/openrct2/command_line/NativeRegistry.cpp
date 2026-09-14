@@ -1,31 +1,31 @@
 #include "NativeRegistry.h"
 
 #include "../Context.h"
-#include "../PlatformEnvironment.h"
-#include "../ReplayManager.h"
-#include "../interface/Screenshot.h"
-#include "../paint/RideRenderDiagnostic.h"
 #include "../Date.h"
 #include "../Game.h"
 #include "../GameState.h"
+#include "../PlatformEnvironment.h"
+#include "../ReplayManager.h"
 #include "../actions/GameAction.hpp"
 #include "../actions/GameActionParameterVisitor.h"
 #include "../actions/GameActionRegistry.h"
 #include "../actions/GameActionRunner.h"
 #include "../entity/Guest.h"
 #include "../entity/Peep.h"
+#include "../interface/Screenshot.h"
+#include "../object/ObjectList.h"
+#include "../object/ObjectManager.h"
+#include "../paint/RideRenderDiagnostic.h"
+#include "../park/ParkFile.h"
 #include "../ride/Ride.h"
 #include "../ride/Vehicle.h"
-#include "../object/ObjectManager.h"
-#include "../object/ObjectList.h"
-#include "../park/ParkFile.h"
 #include "../scenario/Scenario.h"
 #include "../world/Map.h"
 #include "../world/tile_element/EntranceElement.h"
 #include "../world/tile_element/PathElement.h"
-#include "../world/tile_element/TrackElement.h"
 #include "../world/tile_element/SurfaceElement.h"
 #include "../world/tile_element/TileElement.h"
+#include "../world/tile_element/TrackElement.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -118,7 +118,8 @@ namespace OpenRCT2::CommandLine
                 { "carsPerTrain", ride.numCarsPerTrain },
                 { "price", ride.price[0] },
                 { "value", ride.value },
-                { "ratings", {
+                { "ratings",
+                  {
                       { "excitement", static_cast<int32_t>(ride.ratings.excitement) },
                       { "intensity", static_cast<int32_t>(ride.ratings.intensity) },
                       { "nausea", static_cast<int32_t>(ride.ratings.nausea) },
@@ -128,7 +129,8 @@ namespace OpenRCT2::CommandLine
                 { "totalCustomers", ride.totalCustomers },
                 { "totalProfit", ride.totalProfit },
                 { "profit", ride.profit },
-                { "breakdown", {
+                { "breakdown",
+                  {
                       { "pending", ride.flags.has(RideFlag::breakdownPending) },
                       { "broken", ride.flags.has(RideFlag::brokenDown) },
                       { "pendingReason", static_cast<uint8_t>(ride.breakdownReasonPending) },
@@ -289,18 +291,19 @@ namespace OpenRCT2::CommandLine
             return "unknown";
         }
 
-        NativeDispatchResult FindAction(
-            std::string_view name, const json_t& args, GameState_t& state, bool execute)
+        NativeDispatchResult FindAction(std::string_view name, const json_t& args, GameState_t& state, bool execute)
         {
             if (!args.is_object())
                 return Failure("invalid_arguments", "action arguments must be an object");
-            if (args.contains("flags") || args.contains("apply") || args.contains("allowDuringPaused")
-                || args.contains("ghost") || args.contains("noSpend") || args.contains("networked")
-                || args.contains("replay") || args.contains("trackDesign"))
+            if (args.contains("flags") || args.contains("apply") || args.contains("allowDuringPaused") || args.contains("ghost")
+                || args.contains("noSpend") || args.contains("networked") || args.contains("replay")
+                || args.contains("trackDesign"))
             {
-                return Failure("policy_flag", "universal action flags are controlled by the native dispatcher", {
-                    { "allowed", false },
-                });
+                return Failure(
+                    "policy_flag", "universal action flags are controlled by the native dispatcher",
+                    {
+                        { "allowed", false },
+                    });
             }
 
             for (const auto& registration : GameActions::GetRegistrations())
@@ -314,9 +317,11 @@ namespace OpenRCT2::CommandLine
                 for (auto it = args.begin(); it != args.end(); ++it)
                 {
                     if (!schemaVisitor.properties.contains(it.key()))
-                        return Failure("unknown_argument", "argument is not in the native action schema", {
-                            { "name", it.key() },
-                        });
+                        return Failure(
+                            "unknown_argument", "argument is not in the native action schema",
+                            {
+                                { "name", it.key() },
+                            });
                 }
                 JsonVisitor valueVisitor(args);
                 action->AcceptParameters(valueVisitor);
@@ -334,7 +339,8 @@ namespace OpenRCT2::CommandLine
                     { "status", static_cast<uint16_t>(result.error) },
                     { "accepted", result.error == GameActions::Status::ok },
                     { "cost", result.cost },
-                    { "position", {
+                    { "position",
+                      {
                           { "x", result.position.x },
                           { "y", result.position.y },
                           { "z", result.position.z },
@@ -424,13 +430,14 @@ namespace OpenRCT2::CommandLine
             for (uint8_t index = 0; index < ride.numStations; ++index)
             {
                 const auto& station = ride.getStation(StationIndex::FromUnderlying(index));
-                stations.push_back({
-                    { "index", index },
-                    { "start", { { "x", station.Start.x }, { "y", station.Start.y } } },
-                    { "baseZ", station.GetBaseZ() },
-                    { "entrance", StationEndpointValue(station.Entrance) },
-                    { "exit", StationEndpointValue(station.Exit) },
-                });
+                stations.push_back(
+                    {
+                        { "index", index },
+                        { "start", { { "x", station.Start.x }, { "y", station.Start.y } } },
+                        { "baseZ", station.GetBaseZ() },
+                        { "entrance", StationEndpointValue(station.Entrance) },
+                        { "exit", StationEndpointValue(station.Exit) },
+                    });
             }
             return stations;
         }
@@ -471,7 +478,8 @@ namespace OpenRCT2::CommandLine
                 { "flatRideAnimationFrame", vehicle.flatRideAnimationFrame },
                 { "currentTime", vehicle.current_time },
                 { "animationIndex", vehicle.current_time },
-                { "animation", {
+                { "animation",
+                  {
                       { "flatRideAnimationFrame", vehicle.flatRideAnimationFrame },
                       { "currentTime", vehicle.current_time },
                       { "index", vehicle.current_time },
@@ -479,11 +487,13 @@ namespace OpenRCT2::CommandLine
                       { "status", static_cast<uint8_t>(vehicle.status) },
                       { "orientation", vehicle.orientation },
                   } },
-                { "vehicleColours", {
+                { "vehicleColours",
+                  {
                       { "body", static_cast<uint8_t>(vehicle.colours.Body) },
                       { "trim", static_cast<uint8_t>(vehicle.colours.Trim) },
                   } },
-                { "trackLocation", {
+                { "trackLocation",
+                  {
                       { "x", vehicle.TrackLocation.x },
                       { "y", vehicle.TrackLocation.y },
                       { "z", vehicle.TrackLocation.z },
@@ -491,15 +501,12 @@ namespace OpenRCT2::CommandLine
                 { "trackType", static_cast<uint16_t>(vehicle.GetTrackType()) },
                 { "trackDirection", vehicle.GetTrackDirection() },
                 { "trackProgress", vehicle.track_progress },
-                { "nextVehicleOnTrain", vehicle.next_vehicle_on_train.IsNull()
-                                               ? nullptr
-                                               : json_t(vehicle.next_vehicle_on_train.ToUnderlying()) },
-                { "prevVehicleOnRide", vehicle.prev_vehicle_on_ride.IsNull()
-                                              ? nullptr
-                                              : json_t(vehicle.prev_vehicle_on_ride.ToUnderlying()) },
-                { "nextVehicleOnRide", vehicle.next_vehicle_on_ride.IsNull()
-                                              ? nullptr
-                                              : json_t(vehicle.next_vehicle_on_ride.ToUnderlying()) },
+                { "nextVehicleOnTrain",
+                  vehicle.next_vehicle_on_train.IsNull() ? nullptr : json_t(vehicle.next_vehicle_on_train.ToUnderlying()) },
+                { "prevVehicleOnRide",
+                  vehicle.prev_vehicle_on_ride.IsNull() ? nullptr : json_t(vehicle.prev_vehicle_on_ride.ToUnderlying()) },
+                { "nextVehicleOnRide",
+                  vehicle.next_vehicle_on_ride.IsNull() ? nullptr : json_t(vehicle.next_vehicle_on_ride.ToUnderlying()) },
                 { "seatCount", vehicle.num_seats },
                 { "occupants", std::move(occupants) },
                 { "numPeeps", vehicle.num_peeps },
@@ -605,7 +612,8 @@ namespace OpenRCT2::CommandLine
             return {
                 { "source", RideRenderDiagnosticSourceValue(selection.source) },
                 { "componentOrdinal", selection.componentOrdinal },
-                { "animation", {
+                { "animation",
+                  {
                       { "flatRideAnimationFrame", selection.flatRideAnimationFrame },
                       { "currentTime", selection.currentTime },
                       { "index", selection.currentTime },
@@ -613,15 +621,18 @@ namespace OpenRCT2::CommandLine
                       { "status", selection.status },
                       { "orientation", selection.orientation },
                   } },
-                { "vehicleColours", {
+                { "vehicleColours",
+                  {
                       { "body", selection.bodyColour },
                       { "trim", selection.trimColour },
                   } },
-                { "remap", {
+                { "remap",
+                  {
                       { "primary", selection.imagePrimary },
                       { "secondary", selection.imageSecondary },
                   } },
-                { "sprite", {
+                { "sprite",
+                  {
                       { "baseImageIndex", selection.baseImageIndex },
                       { "animationFrame", selection.flatRideAnimationFrame },
                       { "orientationQuarter", selection.orientationQuarter },
@@ -826,40 +837,121 @@ namespace OpenRCT2::CommandLine
         }
 
         const std::array<NativeResourceDescriptor, 12> kResources = {
-            NativeResourceDescriptor{
-                "session", "Current native engine session state.", ObjectSchema({}), { { "tick", "ticks" }, { "sequence", "requests" } },
-                "engine", json_t::array(), "native", [](const json_t&, GameState_t& state) {
-                    return json_t{ { "tick", state.currentTicks }, { "paused", GameIsPaused() } };
-                } },
-            { "park", "Authoritative park state.", EmptySchema(), { { "cash", "money" }, { "entranceFee", "money" }, { "rating", "rating" } },
-                "engine", json_t::array(), "native", ReadPark },
-            { "date", "Authoritative simulation calendar.", EmptySchema(), { { "day", "days" }, { "month", "months" }, { "year", "years" } },
-                "engine", json_t::array(), "native", ReadDate },
-            { "finance", "Authoritative park finance state.", EmptySchema(), { { "cash", "money" }, { "bankLoan", "money" } },
-                "engine", json_t::array(), "native", ReadFinance },
-            { "rides", "Authoritative collection of rides.", EmptySchema(), { { "id", "ride" }, { "price", "money" } },
-                "engine", json_t::array(), "native", ReadRides },
-            { "ride", "Authoritative state for one ride.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } }, "engine", json_t::array(), "native", ReadRide },
-            { "vehicle", "Authoritative state for one ride vehicle.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "entity" }, { "ride", "ride" }, { "x", "map-units" }, { "trackProgress", "track-progress" },
-                  { "flatRideAnimationFrame", "raw-engine-animation" }, { "currentTime", "raw-engine-animation" },
-                  { "animationIndex", "raw-engine-animation" }, { "vehicleColours", "raw-engine-colours" },
-                  { "spriteSelection", "raw-engine-sprite-selection" }, { "numPeeps", "raw-engine-active-span" },
-                  { "nextFreeSeat", "raw-engine-active-span" } },
-                "engine", json_t::array(), "native", ReadVehicle },
-            { "guests", "Authoritative collection of guest entities.", EmptySchema(), { { "id", "entity" }, { "x", "map-units" } },
-                "engine", json_t::array(), "native", ReadGuests },
-            { "guest", "Authoritative state for one guest entity.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "entity" }, { "x", "map-units" } }, "engine", json_t::array(), "native", ReadGuest },
-            { "objects", "Authoritative loaded object identities.", EmptySchema(), { { "count", "objects" } },
-                "engine", json_t::array(), "native", ReadObjects },
-            { "tile", "Authoritative surface and optional path state at a map tile.", ObjectSchema({ { "x", { { "type", "integer" } } }, { "y", { { "type", "integer" } } }, { "includePath", { { "type", "boolean" } } }, { "includeElements", { { "type", "boolean" } } } }, { "x", "y" }),
-                { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" }, { "elements", "ordered" } }, "engine", json_t::array(), "native", ReadTile },
-            { "region", "Derived map-boundary projection from mapSize.", EmptySchema(), { { "mapWidth", "map-units" }, { "mapHeight", "map-units" } },
-                "derived", { "mapSize" }, "native", ReadRegion },
+            NativeResourceDescriptor{ "session",
+                                      "Current native engine session state.",
+                                      ObjectSchema({}),
+                                      { { "tick", "ticks" }, { "sequence", "requests" } },
+                                      "engine",
+                                      json_t::array(),
+                                      "native",
+                                      [](const json_t&, GameState_t& state) {
+                                          return json_t{ { "tick", state.currentTicks }, { "paused", GameIsPaused() } };
+                                      } },
+            { "park",
+              "Authoritative park state.",
+              EmptySchema(),
+              { { "cash", "money" }, { "entranceFee", "money" }, { "rating", "rating" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadPark },
+            { "date",
+              "Authoritative simulation calendar.",
+              EmptySchema(),
+              { { "day", "days" }, { "month", "months" }, { "year", "years" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadDate },
+            { "finance",
+              "Authoritative park finance state.",
+              EmptySchema(),
+              { { "cash", "money" }, { "bankLoan", "money" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadFinance },
+            { "rides",
+              "Authoritative collection of rides.",
+              EmptySchema(),
+              { { "id", "ride" }, { "price", "money" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadRides },
+            { "ride",
+              "Authoritative state for one ride.",
+              ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
+              { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadRide },
+            { "vehicle",
+              "Authoritative state for one ride vehicle.",
+              ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
+              { { "id", "entity" },
+                { "ride", "ride" },
+                { "x", "map-units" },
+                { "trackProgress", "track-progress" },
+                { "flatRideAnimationFrame", "raw-engine-animation" },
+                { "currentTime", "raw-engine-animation" },
+                { "animationIndex", "raw-engine-animation" },
+                { "vehicleColours", "raw-engine-colours" },
+                { "spriteSelection", "raw-engine-sprite-selection" },
+                { "numPeeps", "raw-engine-active-span" },
+                { "nextFreeSeat", "raw-engine-active-span" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadVehicle },
+            { "guests",
+              "Authoritative collection of guest entities.",
+              EmptySchema(),
+              { { "id", "entity" }, { "x", "map-units" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadGuests },
+            { "guest",
+              "Authoritative state for one guest entity.",
+              ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
+              { { "id", "entity" }, { "x", "map-units" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadGuest },
+            { "objects",
+              "Authoritative loaded object identities.",
+              EmptySchema(),
+              { { "count", "objects" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadObjects },
+            { "tile",
+              "Authoritative surface and optional path state at a map tile.",
+              ObjectSchema(
+                  { { "x", { { "type", "integer" } } },
+                    { "y", { { "type", "integer" } } },
+                    { "includePath", { { "type", "boolean" } } },
+                    { "includeElements", { { "type", "boolean" } } } },
+                  { "x", "y" }),
+              { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" }, { "elements", "ordered" } },
+              "engine",
+              json_t::array(),
+              "native",
+              ReadTile },
+            { "region",
+              "Derived map-boundary projection from mapSize.",
+              EmptySchema(),
+              { { "mapWidth", "map-units" }, { "mapHeight", "map-units" } },
+              "derived",
+              { "mapSize" },
+              "native",
+              ReadRegion },
         };
-    }
+    } // namespace
 
     const std::array<NativeResourceDescriptor, 12>& NativeResources()
     {
@@ -888,16 +980,17 @@ namespace OpenRCT2::CommandLine
             auto action = std::unique_ptr<GameActions::GameAction>((*registration.factory)());
             SchemaVisitor visitor;
             action->AcceptParameters(visitor);
-            result.push_back({
-                static_cast<uint32_t>(registration.command),
-                registration.name,
-                std::string("Native engine Game Action ") + registration.name + ".",
-                ObjectSchema(std::move(visitor.properties), std::move(visitor.required)),
-                { { "x", "map-units" }, { "y", "map-units" }, { "z", "height-units" }, { "cost", "money" } },
-                "engine",
-                json_t::array(),
-                "native",
-            });
+            result.push_back(
+                {
+                    static_cast<uint32_t>(registration.command),
+                    registration.name,
+                    std::string("Native engine Game Action ") + registration.name + ".",
+                    ObjectSchema(std::move(visitor.properties), std::move(visitor.required)),
+                    { { "x", "map-units" }, { "y", "map-units" }, { "z", "height-units" }, { "cost", "money" } },
+                    "engine",
+                    json_t::array(),
+                    "native",
+                });
         }
         return result;
     }
@@ -967,10 +1060,12 @@ namespace OpenRCT2::CommandLine
             return Failure("paused_required", "save is only accepted while the engine is paused");
         const auto root = NativeSaveRoot();
         if (!NativePathContained(root, path))
-            return Failure("save_containment", "save path must remain below the owned native save root", {
-                { "root", root },
-                { "path", path },
-            });
+            return Failure(
+                "save_containment", "save path must remain below the owned native save root",
+                {
+                    { "root", root },
+                    { "path", path },
+                });
         std::error_code error;
         std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
         if (error)
@@ -1038,7 +1133,8 @@ namespace OpenRCT2::CommandLine
         ReplayRecordInfo info{};
         replay->GetCurrentReplayInfo(info);
         if (!replay->StopRecording())
-            return Failure("recording_finalize_failed", "the engine could not finalize native recording", { { "path", info.FilePath } });
+            return Failure(
+                "recording_finalize_failed", "the engine could not finalize native recording", { { "path", info.FilePath } });
         return Success({ { "status", "final" }, { "path", info.FilePath }, { "tick", getGameState().currentTicks } });
     }
 
@@ -1052,13 +1148,12 @@ namespace OpenRCT2::CommandLine
             if (!view.contains(key))
                 return Failure("capture_view_invalid", "capture view is missing a required field", { { "field", key } });
         }
-        if (view.size() != 5 || !view["center"].is_object() || view["center"].size() != 2
-            || !view["center"].contains("x") || !view["center"].contains("y"))
+        if (view.size() != 5 || !view["center"].is_object() || view["center"].size() != 2 || !view["center"].contains("x")
+            || !view["center"].contains("y"))
             return Failure("capture_view_invalid", "capture view has an invalid center object");
         const auto& center = view["center"];
-        if (!view["width"].is_number_integer() || !view["height"].is_number_integer()
-            || !center["x"].is_number_integer() || !center["y"].is_number_integer()
-            || !view["zoom"].is_number_integer() || !view["rotation"].is_number_integer())
+        if (!view["width"].is_number_integer() || !view["height"].is_number_integer() || !center["x"].is_number_integer()
+            || !center["y"].is_number_integer() || !view["zoom"].is_number_integer() || !view["rotation"].is_number_integer())
             return Failure("capture_view_invalid", "capture view fields must be integers");
         const auto width = view["width"].get<int64_t>();
         const auto height = view["height"].get<int64_t>();
@@ -1066,8 +1161,7 @@ namespace OpenRCT2::CommandLine
         const auto y = center["y"].get<int64_t>();
         const auto zoom = view["zoom"].get<int64_t>();
         const auto rotation = view["rotation"].get<int64_t>();
-        if (width < 1 || width > 1920 || height < 1 || height > 1080
-            || width * height > 2'073'600)
+        if (width < 1 || width > 1920 || height < 1 || height > 1080 || width * height > 2'073'600)
             return Failure("capture_view_dimensions", "capture view dimensions exceed the bounded pixel limits");
         const auto maxX = static_cast<int64_t>(mapWidth) * 32;
         const auto maxY = static_cast<int64_t>(mapHeight) * 32;
@@ -1077,13 +1171,14 @@ namespace OpenRCT2::CommandLine
             return Failure("capture_view_zoom", "capture view zoom is not supported");
         if (rotation < 0 || rotation > 3)
             return Failure("capture_view_rotation", "capture view rotation is not supported");
-        return Success({
-            { "width", width },
-            { "height", height },
-            { "center", { { "x", x }, { "y", y } } },
-            { "zoom", zoom },
-            { "rotation", rotation },
-        });
+        return Success(
+            {
+                { "width", width },
+                { "height", height },
+                { "center", { { "x", x }, { "y", y } } },
+                { "zoom", zoom },
+                { "rotation", rotation },
+            });
     }
 
     NativeDispatchResult ValidateNativeCaptureView(const json_t& view, const GameState_t& state)
@@ -1091,8 +1186,7 @@ namespace OpenRCT2::CommandLine
         return ValidateNativeCaptureView(view, state.mapSize.x, state.mapSize.y);
     }
 
-    NativeDispatchResult CaptureNativeFrame(
-        std::string_view path, const json_t& view, const bool includeRideRenderDiagnostic)
+    NativeDispatchResult CaptureNativeFrame(std::string_view path, const json_t& view, const bool includeRideRenderDiagnostic)
     {
         if (!NativePathContained(NativeCaptureRoot(), path))
             return Failure("capture_containment", "capture path must remain below the owned capture root");
@@ -1113,7 +1207,9 @@ namespace OpenRCT2::CommandLine
             GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user, DirId::screenshots));
         std::filesystem::create_directories(screenshotRoot, error);
         if (error)
-            return Failure("capture_failed", "unable to create the native screenshot directory", { { "path", path }, { "error", error.message() } });
+            return Failure(
+                "capture_failed", "unable to create the native screenshot directory",
+                { { "path", path }, { "error", error.message() } });
         const auto temporaryName = std::string("parkbench-frame-") + std::to_string(getGameState().currentTicks) + ".png";
         const auto temporary = screenshotRoot / temporaryName;
         std::filesystem::remove(temporary, error);
@@ -1127,12 +1223,12 @@ namespace OpenRCT2::CommandLine
             const auto selected = explicitView
                 ? view
                 : json_t{
-                    { "width", 640 },
-                    { "height", 480 },
-                    { "center", { { "x", state.mapSize.x * 16 }, { "y", state.mapSize.y * 16 } } },
-                    { "zoom", 0 },
-                    { "rotation", 0 },
-                };
+                      { "width", 640 },
+                      { "height", 480 },
+                      { "center", { { "x", state.mapSize.x * 16 }, { "y", state.mapSize.y * 16 } } },
+                      { "zoom", 0 },
+                      { "rotation", 0 },
+                  };
             options.View = CaptureView{
                 selected["width"].get<int32_t>(),
                 selected["height"].get<int32_t>(),
@@ -1146,26 +1242,31 @@ namespace OpenRCT2::CommandLine
         }
         catch (const std::exception& exception)
         {
-            return Failure("capture_failed", "the native renderer could not capture a frame", { { "path", path }, { "error", exception.what() } });
+            return Failure(
+                "capture_failed", "the native renderer could not capture a frame",
+                { { "path", path }, { "error", exception.what() } });
         }
         if (!std::filesystem::is_regular_file(temporary, error) || error)
             return Failure("capture_failed", "the native renderer produced no frame", { { "path", path } });
         std::filesystem::rename(temporary, destination, error);
         if (error)
-            return Failure("capture_failed", "unable to retain the rendered frame", { { "path", path }, { "error", error.message() } });
+            return Failure(
+                "capture_failed", "unable to retain the rendered frame", { { "path", path }, { "error", error.message() } });
         const auto& state = getGameState();
         const auto capturedView = explicitView
             ? view
             : json_t{
-                { "width", 640 },
-                { "height", 480 },
-                { "center", { { "x", state.mapSize.x * 16 }, { "y", state.mapSize.y * 16 } } },
-                { "zoom", 0 },
-                { "rotation", 0 },
-            };
-        auto result = json_t{ { "status", "captured" }, { "path", path }, { "tick", state.currentTicks }, { "view", capturedView } };
+                  { "width", 640 },
+                  { "height", 480 },
+                  { "center", { { "x", state.mapSize.x * 16 }, { "y", state.mapSize.y * 16 } } },
+                  { "zoom", 0 },
+                  { "rotation", 0 },
+              };
+        auto result = json_t{
+            { "status", "captured" }, { "path", path }, { "tick", state.currentTicks }, { "view", capturedView }
+        };
         if (includeRideRenderDiagnostic)
             result["diagnostic"] = RideRenderDiagnosticValue(diagnostic, softwareSurfaceHash);
         return Success(std::move(result));
     }
-}
+} // namespace OpenRCT2::CommandLine

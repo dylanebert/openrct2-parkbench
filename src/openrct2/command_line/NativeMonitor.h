@@ -51,11 +51,10 @@ namespace OpenRCT2::CommandLine
         [[nodiscard]] std::optional<NativeMonitorRequest> TakeRequest();
         [[nodiscard]] bool Lost() const;
 
-        bool SendSuccess(
-            uint64_t id, uint64_t sequence, uint32_t tick, bool paused, const json_t& result);
+        bool SendSuccess(uint64_t id, uint64_t sequence, uint32_t tick, bool paused, const json_t& result);
         bool SendError(
-            uint64_t id, uint64_t sequence, uint32_t tick, bool paused, std::string_view code,
-            std::string_view message, const json_t& detail = nullptr);
+            uint64_t id, uint64_t sequence, uint32_t tick, bool paused, std::string_view code, std::string_view message,
+            const json_t& detail = nullptr);
 
         // These helpers are intentionally public so the focused tests exercise the
         // wire boundary without starting an engine.
@@ -79,4 +78,4 @@ namespace OpenRCT2::CommandLine
         bool _lost;
         std::thread _reader;
     };
-}
+} // namespace OpenRCT2::CommandLine

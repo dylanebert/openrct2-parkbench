@@ -8,34 +8,33 @@
 
 #include "TestData.h"
 
-#include <gtest/gtest.h>
-#include <memory>
-#include <openrct2/Context.h>
-#include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
-#include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
-#include <openrct2/actions/track/TrackDesignAction.h>
-#include <openrct2/actions/CommandFlag.h>
-#include <openrct2/actions/GameActionRunner.h>
-#include <openrct2/actions/ResultWithMessage.h>
-#include <openrct2/command_line/NativeRegistry.h>
-#include <openrct2/Game.h>
-#include <openrct2/GameState.h>
-#include <openrct2/OpenRCT2.h>
-#include <openrct2/ParkImporter.h>
-#include <openrct2/PlatformEnvironment.h>
-#include <openrct2/ride/Ride.h>
-#include <openrct2/ride/RideData.h>
-#include <openrct2/ride/TrackDesign.h>
-#include <openrct2/world/Map.h>
-#include <openrct2/world/tile_element/TrackElement.h>
-#include <openrct2/world/tile_element/SurfaceElement.h>
-#include <openrct2/object/ObjectManager.h>
-
 #include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
+#include <memory>
+#include <openrct2/Context.h>
+#include <openrct2/Game.h>
+#include <openrct2/GameState.h>
+#include <openrct2/OpenRCT2.h>
+#include <openrct2/ParkImporter.h>
+#include <openrct2/PlatformEnvironment.h>
+#include <openrct2/actions/CommandFlag.h>
+#include <openrct2/actions/GameActionRunner.h>
+#include <openrct2/actions/ResultWithMessage.h>
+#include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
+#include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
+#include <openrct2/actions/track/TrackDesignAction.h>
+#include <openrct2/command_line/NativeRegistry.h>
+#include <openrct2/object/ObjectManager.h>
+#include <openrct2/ride/Ride.h>
+#include <openrct2/ride/RideData.h>
+#include <openrct2/ride/TrackDesign.h>
+#include <openrct2/world/Map.h>
+#include <openrct2/world/tile_element/SurfaceElement.h>
+#include <openrct2/world/tile_element/TrackElement.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -108,8 +107,7 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
             { "zoom", 0 },
             { "rotation", 0 },
         },
-        150,
-        150);
+        150, 150);
     EXPECT_TRUE(valid.ok);
     EXPECT_EQ(ValidateNativeCaptureView(json_t::object(), 150, 150).code, "capture_view_invalid");
     EXPECT_EQ(
@@ -121,8 +119,7 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
                 { "zoom", 0 },
                 { "rotation", 0 },
             },
-            150,
-            150)
+            150, 150)
             .code,
         "capture_view_dimensions");
     EXPECT_EQ(
@@ -134,8 +131,7 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
                 { "zoom", 0 },
                 { "rotation", 0 },
             },
-            150,
-            150)
+            150, 150)
             .code,
         "capture_view_center");
     EXPECT_EQ(
@@ -147,8 +143,7 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
                 { "zoom", 4 },
                 { "rotation", 0 },
             },
-            150,
-            150)
+            150, 150)
             .code,
         "capture_view_zoom");
     EXPECT_EQ(
@@ -160,8 +155,7 @@ TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedVal
                 { "zoom", 0 },
                 { "rotation", 4 },
             },
-            150,
-            150)
+            150, 150)
             .code,
         "capture_view_rotation");
 }
@@ -184,8 +178,7 @@ protected:
         _context = OpenRCT2::CreateContext();
         ASSERT_NE(_context, nullptr);
         const auto resources = std::filesystem::current_path() / "OpenRCT2.app/Contents/Resources";
-        _context->GetPlatformEnvironment().SetBasePath(
-            OpenRCT2::DirBase::openrct2, resources.string());
+        _context->GetPlatformEnvironment().SetBasePath(OpenRCT2::DirBase::openrct2, resources.string());
         ASSERT_TRUE(_context->Initialise());
 
         auto importer = OpenRCT2::ParkImporter::CreateS6(_context->GetObjectRepository());
@@ -199,12 +192,7 @@ TEST_F(NativeActionThroughline, RejectedEntranceExitPlacementIsNonMutatingAndStr
 {
     auto& state = OpenRCT2::getGameState();
     const json_t args{
-        { "x", 0 },
-        { "y", 0 },
-        { "direction", 2 },
-        { "ride", 65535 },
-        { "station", 0 },
-        { "isExit", true },
+        { "x", 0 }, { "y", 0 }, { "direction", 2 }, { "ride", 65535 }, { "station", 0 }, { "isExit", true },
     };
     const auto cashBefore = state.park.cash;
     const auto queried = QueryNativeAction("RideEntranceExitPlaceAction", args, state);
@@ -272,24 +260,24 @@ TEST_F(NativeActionThroughline, AcceptedPlacementChargesAndMatchesOrdinaryRunner
     ordinaryState.cheats.sandboxMode = true;
     auto removeOrdinary = OpenRCT2::GameActions::RideEntranceExitRemoveAction(
         ordinaryEndpoint.ToCoordsXY(), ordinaryRideId, ordinaryStation, false);
-    removeOrdinary.SetFlags({
-        OpenRCT2::GameActions::CommandFlag::apply,
-        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
-    });
+    removeOrdinary.SetFlags(
+        {
+            OpenRCT2::GameActions::CommandFlag::apply,
+            OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+        });
     const auto oldInUpdateCode = gInUpdateCode;
     gInUpdateCode = true;
-    ASSERT_EQ(
-        OpenRCT2::GameActions::Execute(&removeOrdinary, ordinaryState).error,
-        OpenRCT2::GameActions::Status::ok);
+    ASSERT_EQ(OpenRCT2::GameActions::Execute(&removeOrdinary, ordinaryState).error, OpenRCT2::GameActions::Status::ok);
     gInUpdateCode = oldInUpdateCode;
     const auto ordinaryCashBefore = ordinaryState.park.cash;
     const auto ordinaryElementsBefore = TileElementCount(ordinaryEndpoint.ToCoordsXY());
     auto ordinaryAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
         ordinaryEndpoint.ToCoordsXY(), ordinaryEndpoint.direction, ordinaryRideId, ordinaryStation, false);
-    ordinaryAction.SetFlags({
-        OpenRCT2::GameActions::CommandFlag::apply,
-        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
-    });
+    ordinaryAction.SetFlags(
+        {
+            OpenRCT2::GameActions::CommandFlag::apply,
+            OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+        });
     gInUpdateCode = true;
     const auto ordinaryResult = OpenRCT2::GameActions::Execute(&ordinaryAction, ordinaryState);
     gInUpdateCode = oldInUpdateCode;
@@ -306,14 +294,13 @@ TEST_F(NativeActionThroughline, AcceptedPlacementChargesAndMatchesOrdinaryRunner
     ASSERT_NE(publicRide, nullptr);
     auto removePublic = OpenRCT2::GameActions::RideEntranceExitRemoveAction(
         ordinaryEndpoint.ToCoordsXY(), ordinaryRideId, ordinaryStation, false);
-    removePublic.SetFlags({
-        OpenRCT2::GameActions::CommandFlag::apply,
-        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
-    });
+    removePublic.SetFlags(
+        {
+            OpenRCT2::GameActions::CommandFlag::apply,
+            OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
+        });
     gInUpdateCode = true;
-    ASSERT_EQ(
-        OpenRCT2::GameActions::Execute(&removePublic, publicState).error,
-        OpenRCT2::GameActions::Status::ok);
+    ASSERT_EQ(OpenRCT2::GameActions::Execute(&removePublic, publicState).error, OpenRCT2::GameActions::Status::ok);
     gInUpdateCode = oldInUpdateCode;
     const auto publicCashBefore = publicState.park.cash;
     const auto publicElementsBefore = TileElementCount(ordinaryEndpoint.ToCoordsXY());
@@ -331,8 +318,7 @@ TEST_F(NativeActionThroughline, AcceptedPlacementChargesAndMatchesOrdinaryRunner
     EXPECT_EQ(TileElementCount(ordinaryEndpoint.ToCoordsXY()), ordinaryElementsAfter);
 }
 
-static bool HasStationTrack(
-    const CoordsXY& endpoint, int16_t z, Direction direction, RideId rideId, StationIndex stationNum)
+static bool HasStationTrack(const CoordsXY& endpoint, int16_t z, Direction direction, RideId rideId, StationIndex stationNum)
 {
     const auto trackLocation = endpoint + CoordsDirectionDelta[direction];
     auto* element = MapGetFirstElementAt(trackLocation);
@@ -380,8 +366,7 @@ TEST_F(NativeActionThroughline, RideActionValidityRejectsEndpointFacingAwayWitho
     Direction invalidDirection = kInvalidDirection;
     for (const auto direction : kAllDirections)
     {
-        if (!HasStationTrack(
-                endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id, StationIndex::FromUnderlying(0)))
+        if (!HasStationTrack(endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id, StationIndex::FromUnderlying(0)))
         {
             invalidDirection = direction;
             break;
@@ -456,8 +441,7 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
             sawTracked |= hasTrack;
             sawMultiStation |= ride->numStations > 1;
 
-            for (StationIndex::UnderlyingType stationValue = 0; stationValue < Limits::kMaxStationsPerRide;
-                 ++stationValue)
+            for (StationIndex::UnderlyingType stationValue = 0; stationValue < Limits::kMaxStationsPerRide; ++stationValue)
             {
                 const auto stationNum = StationIndex::FromUnderlying(stationValue);
                 const auto& station = ride->getStation(stationNum);
@@ -507,9 +491,10 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
 
                     auto ghostAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
                         endpointXY, endpoint.direction, ride->id, stationNum, isExit);
-                    ghostAction.SetFlags(static_cast<OpenRCT2::GameActions::CommandFlag>(
-                        static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::ghost)
-                        | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
+                    ghostAction.SetFlags(
+                        static_cast<OpenRCT2::GameActions::CommandFlag>(
+                            static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::ghost)
+                            | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
                     const auto ghostResult = ghostAction.Query(state, state.park);
                     EXPECT_EQ(ghostResult.error, OpenRCT2::GameActions::Status::ok)
                         << fixture << " ghost endpoint " << endpointXY.x << "," << endpointXY.y << " status "
@@ -517,9 +502,10 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
 
                     auto replayAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
                         endpointXY, endpoint.direction, ride->id, stationNum, isExit);
-                    replayAction.SetFlags(static_cast<OpenRCT2::GameActions::CommandFlag>(
-                        static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::replay)
-                        | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
+                    replayAction.SetFlags(
+                        static_cast<OpenRCT2::GameActions::CommandFlag>(
+                            static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::replay)
+                            | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
                     EXPECT_EQ(replayAction.Query(state, state.park).error, OpenRCT2::GameActions::Status::ok)
                         << fixture << " replay endpoint " << endpointXY.x << "," << endpointXY.y;
                 }
@@ -568,8 +554,7 @@ TEST_F(NativeActionThroughline, RideActionCompatibilityCoversTrackDesignPlacemen
             const CoordsXYZD probe{ mapCoords, surface->getBaseZ(), 0 };
             const auto placeZ = TrackDesignGetZPlacement(trackDesign, *ride, probe);
             const CoordsXYZD origin{ mapCoords, surface->getBaseZ() + placeZ, 0 };
-            OpenRCT2::GameActions::TrackDesignAction action(
-                origin, trackDesign, false, RideInspection::every30Minutes);
+            OpenRCT2::GameActions::TrackDesignAction action(origin, trackDesign, false, RideInspection::every30Minutes);
             action.SetFlags(flags);
             const auto result = action.Execute(state, state.park);
             if (result.error == OpenRCT2::GameActions::Status::ok)
@@ -603,11 +588,9 @@ TEST(NativeApiCapture, DiagnosticCaptureReturnsBoundedRecordsAndIsSameTickInert)
     std::vector<std::filesystem::path> candidates;
     if (const auto* configured = std::getenv("OPENRCT2_RCT2_DATA_PATH"); configured != nullptr)
         candidates.emplace_back(configured);
-    candidates.push_back(
-        home / "Library/Application Support/Steam/steamapps/common/Rollercoaster Tycoon 2");
+    candidates.push_back(home / "Library/Application Support/Steam/steamapps/common/Rollercoaster Tycoon 2");
     const auto rct2Data = std::find_if(candidates.begin(), candidates.end(), [](const auto& path) {
-        return std::filesystem::is_regular_file(path / "Data/g1.dat")
-            && std::filesystem::is_directory(path / "ObjData");
+        return std::filesystem::is_regular_file(path / "Data/g1.dat") && std::filesystem::is_directory(path / "ObjData");
     });
     if (rct2Data == candidates.end())
     {
