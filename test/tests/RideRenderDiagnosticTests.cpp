@@ -94,19 +94,22 @@ TEST(RideRenderDiagnostic, CompositeComponentsKeepOneLogicalSource)
     EXPECT_EQ(diagnostic.Records()[3].componentOrdinal, diagnostic.Records()[1].componentOrdinal);
 }
 
-TEST(RideRenderDiagnostic, EnterpriseBoundariesExposeAdjacentSelectionAndRejectCorruptJoins)
+TEST(RideRenderDiagnostic, FlatRideBoundariesExposeAdjacentSelectionAndRejectCorruptJoins)
 {
     const auto oldNoGraphics = gOpenRCT2NoGraphics;
     gOpenRCT2NoGraphics = false;
 
-    std::array<uint8_t, 4> pixels{ 1, 2, 3, 4 };
-    G1Element sprite{};
-    sprite.offset = pixels.data();
-    sprite.width = 2;
-    sprite.height = 2;
+    std::array<std::array<uint8_t, 4>, 4> pixels{ { { 1, 2, 3, 4 }, { 5, 6, 7, 8 }, { 9, 10, 11, 12 }, { 13, 14, 15, 16 } } };
+    std::array<G1Element, 4> sprites{};
     const auto base = static_cast<ImageIndex>(SPR_IMAGE_LIST_BEGIN + 1000);
-    for (uint32_t offset : { 40u, 48u, 52u, 60u })
-        GfxSetG1Element(static_cast<ImageIndex>(base + offset), &sprite);
+    const std::array<uint32_t, 4> offsets{ 10, 12, 13, 15 };
+    for (size_t i = 0; i < sprites.size(); ++i)
+    {
+        sprites[i].offset = pixels[i].data();
+        sprites[i].width = 2;
+        sprites[i].height = 2;
+        GfxSetG1Element(static_cast<ImageIndex>(base + offsets[i]), &sprites[i]);
+    }
 
     const auto body = static_cast<Drawing::Colour>(28);
     const auto trim = static_cast<Drawing::Colour>(2);
@@ -116,12 +119,16 @@ TEST(RideRenderDiagnostic, EnterpriseBoundariesExposeAdjacentSelectionAndRejectC
     source.entity = 1;
 
     auto add = [&](const uint8_t frame, const int16_t currentTime) {
-        const auto offset = (static_cast<uint32_t>(frame) << 2) + 0;
+        const auto offset = static_cast<uint32_t>(frame);
         const auto image = ImageId(static_cast<ImageIndex>(base + offset), body, trim);
         const auto ordinal = diagnostic.RecordPaint(source, RideRenderDiagnostic::Component::parent, image, { 10, 20 });
-        EnterpriseSpriteSelection selection;
+        FlatRideSpriteSelection selection;
         selection.source = source;
         selection.componentOrdinal = ordinal;
+        selection.rideType = 33;
+        selection.rideEntry = 10;
+        selection.trackStyle = 42;
+        selection.trackType = 266;
         selection.flatRideAnimationFrame = frame;
         selection.currentTime = currentTime;
         selection.status = 12;
@@ -134,7 +141,7 @@ TEST(RideRenderDiagnostic, EnterpriseBoundariesExposeAdjacentSelectionAndRejectC
         selection.imageOffset = offset;
         selection.selectedImageIndex = image.GetIndex();
         selection.stableIdentity = RideRenderDiagnostic::StableSpriteIdentity(image);
-        return std::pair<EnterpriseSpriteSelection, uint32_t>{ selection, ordinal };
+        return std::pair<FlatRideSpriteSelection, uint32_t>{ selection, ordinal };
     };
 
     const auto frame12 = add(12, 239);
@@ -142,38 +149,54 @@ TEST(RideRenderDiagnostic, EnterpriseBoundariesExposeAdjacentSelectionAndRejectC
     const auto frame15 = add(15, 227);
     const auto frame10 = add(10, 228);
 
-    EXPECT_TRUE(diagnostic.RecordEnterpriseSelection(frame12.first));
-    EXPECT_TRUE(diagnostic.RecordEnterpriseSelection(frame13.first));
-    EXPECT_TRUE(diagnostic.RecordEnterpriseSelection(frame15.first));
-    EXPECT_TRUE(diagnostic.RecordEnterpriseSelection(frame10.first));
-    ASSERT_EQ(diagnostic.EnterpriseSelections().size(), 4u);
-    EXPECT_EQ(diagnostic.EnterpriseSelections()[1].imageOffset - diagnostic.EnterpriseSelections()[0].imageOffset, 4u);
-    EXPECT_EQ(diagnostic.EnterpriseSelections()[2].imageOffset - diagnostic.EnterpriseSelections()[3].imageOffset, 20u);
-    EXPECT_EQ(diagnostic.EnterpriseSelections()[0].source, diagnostic.EnterpriseSelections()[1].source);
-    EXPECT_EQ(diagnostic.EnterpriseSelections()[0].bodyColour, diagnostic.EnterpriseSelections()[1].bodyColour);
-    EXPECT_EQ(diagnostic.EnterpriseSelections()[0].trimColour, diagnostic.EnterpriseSelections()[1].trimColour);
+    EXPECT_TRUE(diagnostic.RecordFlatRideSelection(frame12.first));
+    EXPECT_TRUE(diagnostic.RecordFlatRideSelection(frame13.first));
+    EXPECT_TRUE(diagnostic.RecordFlatRideSelection(frame15.first));
+    EXPECT_TRUE(diagnostic.RecordFlatRideSelection(frame10.first));
+    ASSERT_EQ(diagnostic.FlatRideSelections().size(), 4u);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].rideType, 33);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].rideEntry, 10);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].trackStyle, 42);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].trackType, 266);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].flatRideAnimationFrame, 12);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[1].flatRideAnimationFrame, 13);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[2].flatRideAnimationFrame, 15);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[3].flatRideAnimationFrame, 10);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].selectedImageIndex, base + 12);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[1].selectedImageIndex, base + 13);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[2].selectedImageIndex, base + 15);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[3].selectedImageIndex, base + 10);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[1].imageOffset - diagnostic.FlatRideSelections()[0].imageOffset, 1u);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[2].imageOffset - diagnostic.FlatRideSelections()[3].imageOffset, 5u);
+    EXPECT_NE(diagnostic.FlatRideSelections()[0].stableIdentity, diagnostic.FlatRideSelections()[1].stableIdentity);
+    EXPECT_NE(diagnostic.FlatRideSelections()[2].stableIdentity, diagnostic.FlatRideSelections()[3].stableIdentity);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].source, diagnostic.FlatRideSelections()[1].source);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].bodyColour, diagnostic.FlatRideSelections()[1].bodyColour);
+    EXPECT_EQ(diagnostic.FlatRideSelections()[0].trimColour, diagnostic.FlatRideSelections()[1].trimColour);
 
     // The source/component join remains valid even when the raw selected image
     // representation differs after palette/station remapping.
     auto remapped = add(12, 241);
     remapped.first.imagePrimary++;
-    EXPECT_TRUE(diagnostic.RecordEnterpriseSelection(remapped.first));
-    ASSERT_EQ(diagnostic.EnterpriseSelections().size(), 5u);
+    EXPECT_TRUE(diagnostic.RecordFlatRideSelection(remapped.first));
+    ASSERT_EQ(diagnostic.FlatRideSelections().size(), 5u);
 
     auto missingAnimation = frame12.first;
     missingAnimation.imageOffset = 0;
-    EXPECT_FALSE(diagnostic.RecordEnterpriseSelection(missingAnimation));
+    EXPECT_FALSE(diagnostic.RecordFlatRideSelection(missingAnimation));
     auto mutatedRemap = frame12.first;
     mutatedRemap.imagePrimary++;
-    EXPECT_FALSE(diagnostic.RecordEnterpriseSelection(mutatedRemap));
+    EXPECT_FALSE(diagnostic.RecordFlatRideSelection(mutatedRemap));
     auto mutatedIdentity = frame12.first;
     mutatedIdentity.stableIdentity[0] = mutatedIdentity.stableIdentity[0] == '0' ? '1' : '0';
-    EXPECT_FALSE(diagnostic.RecordEnterpriseSelection(mutatedIdentity));
+    EXPECT_FALSE(diagnostic.RecordFlatRideSelection(mutatedIdentity));
     auto duplicateComponent = frame12.first;
-    EXPECT_FALSE(diagnostic.RecordEnterpriseSelection(duplicateComponent));
+    EXPECT_EQ(
+        diagnostic.TryRecordFlatRideSelection(duplicateComponent), FlatRideSelectionRecordResult::duplicateComponent);
     auto wrongSource = frame12.first;
     wrongSource.source.entity = 2;
-    EXPECT_FALSE(diagnostic.RecordEnterpriseSelection(wrongSource));
+    EXPECT_EQ(
+        diagnostic.TryRecordFlatRideSelection(wrongSource), FlatRideSelectionRecordResult::sourceComponentMissing);
 
     gOpenRCT2NoGraphics = oldNoGraphics;
 }

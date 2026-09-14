@@ -42,7 +42,7 @@ namespace OpenRCT2
         bool operator==(const RideRenderDiagnosticSource&) const = default;
     };
 
-    struct EnterpriseSpriteSelection
+    struct FlatRideSpriteSelection
     {
         RideRenderDiagnosticSource source;
         uint32_t componentOrdinal = 0;
@@ -60,13 +60,58 @@ namespace OpenRCT2
         uint32_t imageOffset = 0;
         uint32_t selectedImageIndex = 0;
         std::string stableIdentity;
+        uint16_t rideType = RideRenderDiagnosticSource::kNull;
+        uint16_t rideEntry = RideRenderDiagnosticSource::kNull;
+        uint16_t trackStyle = RideRenderDiagnosticSource::kNull;
+        uint16_t trackType = RideRenderDiagnosticSource::kNull;
+    };
+
+    enum class FlatRideSelectionRecordResult : uint8_t
+    {
+        recorded,
+        sourceComponentMissing,
+        duplicateComponent,
+    };
+
+    using EnterpriseSpriteSelection = FlatRideSpriteSelection;
+    using EnterpriseSelectionRecordResult = FlatRideSelectionRecordResult;
+
+    enum class FlatRideSelectionAttemptReason : uint8_t
+    {
+        recorded,
+        rideEntryMissing,
+        notOnTrack,
+        vehicleMissing,
+        diagnosticUnavailable,
+        paintStructMissing,
+        sourceComponentMissing,
+        recordRejected,
+    };
+
+    struct FlatRideSelectionAttempt
+    {
+        FlatRideSelectionAttemptReason reason = FlatRideSelectionAttemptReason::recordRejected;
+        uint16_t rideType = RideRenderDiagnosticSource::kNull;
+        uint16_t rideEntry = RideRenderDiagnosticSource::kNull;
+        uint16_t trackStyle = RideRenderDiagnosticSource::kNull;
+        uint16_t trackType = RideRenderDiagnosticSource::kNull;
+        bool dispatcherReached = false;
+        bool rideEntryFound = false;
+        bool onTrack = false;
+        bool vehicleFound = false;
+        bool diagnosticAvailable = false;
+        bool paintStructFound = false;
+        bool sourceComponentJoined = false;
+        bool recordCalled = false;
+        bool recordAccepted = false;
+        FlatRideSpriteSelection selection;
     };
 
     class RideRenderDiagnostic
     {
     public:
         static constexpr size_t kMaxRecords = 4096;
-
+        static constexpr size_t kMaxFlatRideSelectionAttempts = 4096;
         enum class Phase : uint8_t
         {
             paint,
@@ -101,13 +146,27 @@ namespace OpenRCT2
         void RecordDraw(
             RideRenderDiagnosticSource source, Component component, uint32_t componentOrdinal, ImageId image,
             const ScreenCoordsXY& screenPosition);
-        // Records the raw Enterprise selection only when it joins an emitted parent
+        // Records raw flat-ride selection only when it joins an emitted parent
         // paint record. This is evidence, not a renderer verdict.
+        FlatRideSelectionRecordResult TryRecordFlatRideSelection(FlatRideSpriteSelection selection);
+        EnterpriseSelectionRecordResult TryRecordEnterpriseSelection(EnterpriseSpriteSelection selection);
+        bool RecordFlatRideSelection(FlatRideSpriteSelection selection);
         bool RecordEnterpriseSelection(EnterpriseSpriteSelection selection);
-
-        const std::vector<EnterpriseSpriteSelection>& EnterpriseSelections() const
+        bool HasPaintRecord(const RideRenderDiagnosticSource& source, uint32_t componentOrdinal) const;
+        void RecordFlatRideSelectionAttempt(FlatRideSelectionAttempt attempt);
+        const std::vector<FlatRideSpriteSelection>& FlatRideSelections() const
         {
-            return _enterpriseSelections;
+            return _flatRideSelections;
+        }
+
+        const std::vector<FlatRideSelectionAttempt>& FlatRideSelectionAttempts() const
+        {
+            return _flatRideSelectionAttempts;
+        }
+
+        bool FlatRideAttemptsTruncated() const
+        {
+            return _flatRideAttemptsTruncated;
         }
 
         const std::vector<Record>& Records() const
@@ -123,14 +182,18 @@ namespace OpenRCT2
         void Clear()
         {
             _records.clear();
-            _enterpriseSelections.clear();
+            _flatRideSelections.clear();
+            _flatRideSelectionAttempts.clear();
             _recordsTruncated = false;
+            _flatRideAttemptsTruncated = false;
         }
 
     private:
         uint32_t NextComponentOrdinal(const RideRenderDiagnosticSource& source) const;
         std::vector<Record> _records;
-        std::vector<EnterpriseSpriteSelection> _enterpriseSelections;
+        std::vector<FlatRideSpriteSelection> _flatRideSelections;
+        std::vector<FlatRideSelectionAttempt> _flatRideSelectionAttempts;
         bool _recordsTruncated = false;
+        bool _flatRideAttemptsTruncated = false;
     };
 } // namespace OpenRCT2

@@ -522,6 +522,10 @@ namespace OpenRCT2::CommandLine
                     { "orientationQuarter", orientationQuarter },
                     { "imageOffset", imageOffset },
                     { "selectedImageIndex", static_cast<uint32_t>(image.GetIndex()) },
+                    { "remap", {
+                          { "primary", image.GetRemap() },
+                          { "secondary", static_cast<uint8_t>(image.GetSecondary()) },
+                      } },
                     { "stableIdentity", RideRenderDiagnostic::StableSpriteIdentity(image) },
                 };
             }
@@ -600,11 +604,39 @@ namespace OpenRCT2::CommandLine
             };
         }
 
-        json_t RideRenderDiagnosticEnterpriseSelectionValue(const EnterpriseSpriteSelection& selection)
+        const char* FlatRideSelectionAttemptReasonName(const FlatRideSelectionAttemptReason reason)
+        {
+            switch (reason)
+            {
+                case FlatRideSelectionAttemptReason::recorded:
+                    return "recorded";
+                case FlatRideSelectionAttemptReason::rideEntryMissing:
+                    return "ride_entry_missing";
+                case FlatRideSelectionAttemptReason::notOnTrack:
+                    return "not_on_track";
+                case FlatRideSelectionAttemptReason::vehicleMissing:
+                    return "vehicle_missing";
+                case FlatRideSelectionAttemptReason::diagnosticUnavailable:
+                    return "diagnostic_unavailable";
+                case FlatRideSelectionAttemptReason::paintStructMissing:
+                    return "paint_struct_missing";
+                case FlatRideSelectionAttemptReason::sourceComponentMissing:
+                    return "source_component_missing";
+                case FlatRideSelectionAttemptReason::recordRejected:
+                    return "record_rejected";
+            }
+            return "unknown";
+        }
+
+        json_t RideRenderDiagnosticFlatRideSelectionValue(const FlatRideSpriteSelection& selection)
         {
             return {
                 { "source", RideRenderDiagnosticSourceValue(selection.source) },
                 { "componentOrdinal", selection.componentOrdinal },
+                { "rideType", NullableDiagnosticId(selection.rideType) },
+                { "rideEntry", NullableDiagnosticId(selection.rideEntry) },
+                { "trackStyle", NullableDiagnosticId(selection.trackStyle) },
+                { "trackType", NullableDiagnosticId(selection.trackType) },
                 { "animation", {
                       { "flatRideAnimationFrame", selection.flatRideAnimationFrame },
                       { "currentTime", selection.currentTime },
@@ -632,20 +664,51 @@ namespace OpenRCT2::CommandLine
             };
         }
 
+        json_t RideRenderDiagnosticFlatRideSelectionAttemptValue(const FlatRideSelectionAttempt& attempt)
+        {
+            return {
+                { "reason", FlatRideSelectionAttemptReasonName(attempt.reason) },
+                { "reached", {
+                      { "dispatcher", attempt.dispatcherReached },
+                      { "rideEntry", attempt.rideEntryFound },
+                      { "onTrack", attempt.onTrack },
+                      { "vehiclePointer", attempt.vehicleFound },
+                      { "diagnosticPointer", attempt.diagnosticAvailable },
+                      { "paintStruct", attempt.paintStructFound },
+                      { "sourceComponentJoin", attempt.sourceComponentJoined },
+                      { "recordFlatRideSelection", attempt.recordCalled },
+                      { "recordAccepted", attempt.recordAccepted },
+                  } },
+                { "raw", {
+                      { "rideType", NullableDiagnosticId(attempt.rideType) },
+                      { "rideEntry", NullableDiagnosticId(attempt.rideEntry) },
+                      { "trackStyle", NullableDiagnosticId(attempt.trackStyle) },
+                      { "trackType", NullableDiagnosticId(attempt.trackType) },
+                      { "selection", RideRenderDiagnosticFlatRideSelectionValue(attempt.selection) },
+                  } },
+            };
+        }
+
         json_t RideRenderDiagnosticValue(const RideRenderDiagnostic& diagnostic, std::string_view softwareSurfaceHash)
         {
             json_t records = json_t::array();
             for (const auto& record : diagnostic.Records())
                 records.push_back(RideRenderDiagnosticRecordValue(record));
-            json_t enterpriseSelections = json_t::array();
-            for (const auto& selection : diagnostic.EnterpriseSelections())
-                enterpriseSelections.push_back(RideRenderDiagnosticEnterpriseSelectionValue(selection));
+            json_t flatRideSelections = json_t::array();
+            for (const auto& selection : diagnostic.FlatRideSelections())
+                flatRideSelections.push_back(RideRenderDiagnosticFlatRideSelectionValue(selection));
+            json_t flatRideSelectionAttempts = json_t::array();
+            for (const auto& attempt : diagnostic.FlatRideSelectionAttempts())
+                flatRideSelectionAttempts.push_back(RideRenderDiagnosticFlatRideSelectionAttemptValue(attempt));
             return {
                 { "surfaceHash", softwareSurfaceHash },
                 { "records", std::move(records) },
-                { "enterpriseSelections", std::move(enterpriseSelections) },
+                { "flatRideSelections", std::move(flatRideSelections) },
+                { "flatRideSelectionAttempts", std::move(flatRideSelectionAttempts) },
                 { "recordsTruncated", diagnostic.RecordsTruncated() },
+                { "flatRideAttemptsTruncated", diagnostic.FlatRideAttemptsTruncated() },
                 { "maxRecords", RideRenderDiagnostic::kMaxRecords },
+                { "maxFlatRideSelectionAttempts", RideRenderDiagnostic::kMaxFlatRideSelectionAttempts },
             };
         }
 

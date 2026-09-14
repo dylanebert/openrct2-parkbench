@@ -653,10 +653,23 @@ TEST(NativeApiCapture, DiagnosticCaptureReturnsBoundedRecordsAndIsSameTickInert)
     ASSERT_TRUE(diagnostic["surfaceHash"].is_string());
     EXPECT_EQ(diagnostic["surfaceHash"].get<std::string>().size(), 64u);
     ASSERT_TRUE(diagnostic["records"].is_array());
-    ASSERT_TRUE(diagnostic["enterpriseSelections"].is_array());
+    ASSERT_TRUE(diagnostic["flatRideSelections"].is_array());
+    ASSERT_TRUE(diagnostic["flatRideSelectionAttempts"].is_array());
     EXPECT_GT(diagnostic["records"].size(), 0u);
     EXPECT_LE(diagnostic["records"].size(), diagnostic["maxRecords"]);
+    EXPECT_LE(diagnostic["flatRideSelectionAttempts"].size(), diagnostic["maxFlatRideSelectionAttempts"]);
     EXPECT_FALSE(diagnostic["recordsTruncated"].get<bool>());
+    EXPECT_FALSE(diagnostic["flatRideAttemptsTruncated"].get<bool>());
+    if (!diagnostic["flatRideSelectionAttempts"].empty())
+    {
+        const auto& attempt = diagnostic["flatRideSelectionAttempts"].front();
+        EXPECT_TRUE(attempt["reason"].is_string());
+        EXPECT_TRUE(attempt["reached"]["dispatcher"].is_boolean());
+        EXPECT_TRUE(attempt["raw"].contains("rideType"));
+        EXPECT_TRUE(attempt["raw"].contains("rideEntry"));
+        EXPECT_TRUE(attempt["raw"].contains("trackStyle"));
+        EXPECT_TRUE(attempt["raw"].contains("trackType"));
+    }
     const auto& record = diagnostic["records"].front();
     EXPECT_TRUE(record.contains("phase"));
     EXPECT_TRUE(record.contains("component"));
@@ -674,12 +687,19 @@ TEST(NativeApiCapture, DiagnosticCaptureReturnsBoundedRecordsAndIsSameTickInert)
     ASSERT_TRUE(second.ok) << second.code << ": " << second.message;
     EXPECT_EQ(second.value["diagnostic"]["surfaceHash"], diagnostic["surfaceHash"]);
     ASSERT_EQ(second.value["diagnostic"]["records"].size(), diagnostic["records"].size());
-    ASSERT_EQ(second.value["diagnostic"]["enterpriseSelections"].size(), diagnostic["enterpriseSelections"].size());
+    ASSERT_EQ(second.value["diagnostic"]["flatRideSelections"].size(), diagnostic["flatRideSelections"].size());
+    ASSERT_EQ(
+        second.value["diagnostic"]["flatRideSelectionAttempts"].size(),
+        diagnostic["flatRideSelectionAttempts"].size());
     for (size_t i = 0; i < diagnostic["records"].size(); ++i)
         EXPECT_EQ(second.value["diagnostic"]["records"][i], diagnostic["records"][i]) << "record " << i;
-    for (size_t i = 0; i < diagnostic["enterpriseSelections"].size(); ++i)
-        EXPECT_EQ(second.value["diagnostic"]["enterpriseSelections"][i], diagnostic["enterpriseSelections"][i])
+    for (size_t i = 0; i < diagnostic["flatRideSelections"].size(); ++i)
+        EXPECT_EQ(second.value["diagnostic"]["flatRideSelections"][i], diagnostic["flatRideSelections"][i])
             << "selection " << i;
+    for (size_t i = 0; i < diagnostic["flatRideSelectionAttempts"].size(); ++i)
+        EXPECT_EQ(
+            second.value["diagnostic"]["flatRideSelectionAttempts"][i], diagnostic["flatRideSelectionAttempts"][i])
+            << "attempt " << i;
     ASSERT_TRUE(std::filesystem::is_regular_file(secondPath));
     std::ifstream firstFile(firstPath, std::ios::binary);
     std::ifstream secondFile(secondPath, std::ios::binary);
