@@ -661,6 +661,10 @@ TEST(NativeApiCapture, DiagnosticCaptureReturnsBoundedRecordsAndIsSameTickInert)
     EXPECT_TRUE(record.contains("component"));
     EXPECT_TRUE(record.contains("source"));
     EXPECT_TRUE(record.contains("image"));
+    ASSERT_TRUE(record["image"].is_object());
+    EXPECT_TRUE(record["image"]["index"].is_number_unsigned());
+    ASSERT_TRUE(record["image"]["stableIdentity"].is_string());
+    EXPECT_EQ(record["image"]["stableIdentity"].get<std::string>().size(), 64u);
     EXPECT_TRUE(record.contains("screenPosition"));
     ASSERT_TRUE(std::filesystem::is_regular_file(firstPath));
     ASSERT_GT(std::filesystem::file_size(firstPath), 0u);
