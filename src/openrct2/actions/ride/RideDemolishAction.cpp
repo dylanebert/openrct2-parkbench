@@ -57,6 +57,11 @@ namespace OpenRCT2::GameActions
 
     Result RideDemolishAction::Query(GameState_t& gameState, Park::ParkData& park) const
     {
+        if (EnumValue(_modifyType) > EnumValue(RideModifyType::renew))
+        {
+            return Result(Status::invalidParameters, STR_CANT_DO_THIS, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
+
         auto ride = GetRide(_rideIndex);
         if (ride == nullptr)
         {

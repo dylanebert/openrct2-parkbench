@@ -43,7 +43,13 @@ namespace OpenRCT2::GameActions
             return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_RIDE_NOT_FOUND);
         }
 
-        if (_value <= 0)
+        if (EnumValue(_type) > EnumValue(RideRatingType::nausea))
+        {
+            LOG_ERROR("Invalid rating type: %u", EnumValue(_type));
+            return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
+
+        if (_value <= 0 || _value == RideRating::kUndefined)
         {
             LOG_ERROR("Rating value must be positive: %u", _rideIndex.ToUnderlying());
             return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_VALUE_OUT_OF_RANGE);

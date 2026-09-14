@@ -19,11 +19,23 @@
 #include <openrct2/actions/CommandFlag.h>
 #include <openrct2/actions/GameAction.hpp>
 #include <openrct2/actions/GameActionRunner.h>
+#include <openrct2/actions/ride/RideCreateAction.h>
+#include <openrct2/actions/ride/RideDemolishAction.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
+#include <openrct2/actions/ride/RideFreezeRatingAction.h>
+#include <openrct2/actions/ride/RideSetAppearanceAction.h>
+#include <openrct2/actions/ride/RideSetColourSchemeAction.h>
+#include <openrct2/actions/ride/RideSetNameAction.h>
+#include <openrct2/actions/ride/RideSetPriceAction.h>
+#include <openrct2/actions/ride/RideSetSettingAction.h>
+#include <openrct2/actions/ride/RideSetStatusAction.h>
+#include <openrct2/actions/ride/RideSetVehicleAction.h>
+#include <openrct2/actions/ride/RideSetVisibilityAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/world/Map.h>
+#include <openrct2/world/tile_element/TrackElement.h>
 
 #include <algorithm>
 #include <functional>
@@ -241,6 +253,182 @@ namespace
         return result.error == GameActions::Status::ok;
     }
 
+    struct RideFixtureState
+    {
+        RideId ride = RideId::GetNull();
+        CoordsXYZD track{};
+        TrackElemType trackType{};
+        ObjectEntryIndex rideObject = kObjectEntryIndexNull;
+        ObjectEntryIndex entranceObject = kObjectEntryIndexNull;
+        uint8_t vehiclePresetCount = 1;
+    };
+
+    Ride* FindFixtureRide()
+    {
+        for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+        {
+            auto* ride = GetRide(RideId::FromUnderlying(i));
+            if (ride != nullptr)
+                return ride;
+        }
+        return nullptr;
+    }
+
+    bool FindFixtureTrack(CoordsXYZD& location, TrackElemType& type)
+    {
+        auto& state = getGameState();
+        for (int32_t x = 0; x < state.mapSize.x; ++x)
+        {
+            for (int32_t y = 0; y < state.mapSize.y; ++y)
+            {
+                const auto tile = TileCoordsXY{ x, y };
+                auto* element = MapGetFirstElementAt(tile);
+                if (element == nullptr)
+                    continue;
+                do
+                {
+                    if (element->getType() == TileElementType::Track)
+                    {
+                        const auto* track = element->asTrack();
+                        location = { CoordsXY{ tile.x * kCoordsXYStep, tile.y * kCoordsXYStep }, track->getBaseZ(), track->getDirection() };
+                        type = track->GetTrackType();
+                        return true;
+                    }
+                } while (!(element++)->isLastForTile());
+            }
+        }
+        return false;
+    }
+
+    void PrepareFixtureRide(GameState_t& state, const std::shared_ptr<RideFixtureState>& fixture)
+    {
+        state.cheats.disableClearanceChecks = true;
+        state.cheats.sandboxMode = true;
+        auto* ride = FindFixtureRide();
+        if (ride == nullptr)
+            return;
+        ride->status = RideStatus::closed;
+        ride->flags.unset(RideFlag::brokenDown);
+        fixture->ride = ride->id;
+        fixture->rideObject = ride->subtype;
+        fixture->entranceObject = ride->entranceStyle;
+        if (const auto* entry = GetRideEntryByIndex(ride->subtype); entry != nullptr)
+            fixture->vehiclePresetCount = entry->vehicle_preset_list->count;
+        FindFixtureTrack(fixture->track, fixture->trackType);
+    }
+
+    json_t RideListProjection(const GameState_t& state)
+    {
+        json_t rides = json_t::array();
+        for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+        {
+            const auto* ride = GetRide(RideId::FromUnderlying(i));
+            if (ride == nullptr)
+                continue;
+            rides.push_back({
+                { "id", i },
+                { "type", ride->type },
+                { "object", ride->subtype },
+                { "status", static_cast<uint8_t>(ride->status) },
+                { "name", ride->customName },
+                { "mode", static_cast<uint8_t>(ride->mode) },
+                { "departure", ride->departFlags },
+                { "minWaitingTime", ride->minWaitingTime },
+                { "maxWaitingTime", ride->maxWaitingTime },
+                { "operation", ride->operationOption },
+                { "inspectionInterval", static_cast<uint8_t>(ride->inspectionInterval) },
+                { "liftHillSpeed", ride->liftHillSpeed },
+                { "numCircuits", ride->numCircuits },
+                { "music", ride->music },
+                { "entranceStyle", ride->entranceStyle },
+                { "vehicleColourSettings", static_cast<uint8_t>(ride->vehicleColourSettings) },
+                { "trackColours", json_t::array() },
+                { "vehicleColours", json_t::array() },
+                { "price0", ride->price[0] },
+                { "price1", ride->price[1] },
+                { "numTrains", ride->numTrains },
+                { "proposedNumTrains", ride->proposedNumTrains },
+                { "numCarsPerTrain", ride->numCarsPerTrain },
+                { "proposedNumCarsPerTrain", ride->proposedNumCarsPerTrain },
+                { "vehicleChangeTimeout", ride->vehicleChangeTimeout },
+                { "fixedRatings", ride->flags.has(RideFlag::fixedRatings) },
+                { "randomShopColours", ride->flags.has(RideFlag::randomShopColours) },
+                { "excitement", static_cast<int32_t>(ride->ratings.excitement) },
+                { "intensity", static_cast<int32_t>(ride->ratings.intensity) },
+                { "nausea", static_cast<int32_t>(ride->ratings.nausea) },
+            });
+            for (const auto& colours : ride->trackColours)
+            {
+                rides.back()["trackColours"].push_back({
+                    { "main", static_cast<uint8_t>(colours.main) },
+                    { "additional", static_cast<uint8_t>(colours.additional) },
+                    { "supports", static_cast<uint8_t>(colours.supports) },
+                });
+            }
+            for (const auto& colours : ride->vehicleColours)
+            {
+                rides.back()["vehicleColours"].push_back({
+                    { "body", static_cast<uint8_t>(colours.Body) },
+                    { "trim", static_cast<uint8_t>(colours.Trim) },
+                    { "tertiary", static_cast<uint8_t>(colours.Tertiary) },
+                });
+            }
+        }
+        return { { "cash", state.park.cash }, { "rides", std::move(rides) } };
+    }
+
+    json_t RideProjection(const GameState_t& state, const json_t& args)
+    {
+        auto projection = RideListProjection(state);
+        const auto rideValue = args.value("ride", -1);
+        if (rideValue >= 0 && rideValue < Limits::kMaxRidesInPark)
+        {
+            const auto* ride = GetRide(RideId::FromUnderlying(rideValue));
+            projection["selectedRide"] = ride == nullptr ? json_t(nullptr) : json_t(rideValue);
+        }
+        return projection;
+    }
+
+    json_t TrackProjection(const GameState_t& state, const json_t& args)
+    {
+        auto projection = RideProjection(state, args);
+        size_t visibleTracks = 0;
+        size_t invisibleTracks = 0;
+        json_t trackState = json_t::array();
+        for (int32_t x = 0; x < state.mapSize.x; ++x)
+        {
+            for (int32_t y = 0; y < state.mapSize.y; ++y)
+            {
+                auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                if (element == nullptr)
+                    continue;
+                do
+                {
+                    if (element->getType() != TileElementType::Track)
+                        continue;
+                    const auto* track = element->asTrack();
+                    trackState.push_back({
+                        { "x", x },
+                        { "y", y },
+                        { "z", track->getBaseZ() },
+                        { "type", static_cast<uint16_t>(track->GetTrackType()) },
+                        { "ride", track->GetRideIndex().ToUnderlying() },
+                        { "scheme", track->GetColourScheme() },
+                        { "invisible", track->isInvisible() },
+                    });
+                    if (track->isInvisible())
+                        ++invisibleTracks;
+                    else
+                        ++visibleTracks;
+                } while (!(element++)->isLastForTile());
+            }
+        }
+        projection["visibleTracks"] = visibleTracks;
+        projection["invisibleTracks"] = invisibleTracks;
+        projection["trackState"] = std::move(trackState);
+        return projection;
+    }
+
     class NativeActionContractHarness : public testing::Test
     {
     protected:
@@ -261,6 +449,366 @@ namespace
             auto loadResult = importer->LoadSavedGame(TestData::GetParkPath(name).c_str(), false);
             _context->GetObjectManager().LoadObjects(loadResult.RequiredObjects);
             importer->Import(OpenRCT2::getGameState());
+        }
+
+        std::vector<NativeActionFixture> MakeRideFixtures()
+        {
+            std::vector<NativeActionFixture> fixtures;
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideCreateAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor construction of a ride";
+                fixture.untrustedParameters = {
+                    "rideType", "rideObject", "entranceObject", "colour1", "colour2", "inspectionInterval" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) {
+                    PrepareFixtureRide(state, values);
+                };
+                fixture.legalArgs = [values] {
+                    const auto* ride = GetRide(values->ride);
+                    return json_t{
+                        { "rideType", ride == nullptr ? 0 : ride->type },
+                        { "rideObject", values->rideObject },
+                        { "entranceObject", values->entranceObject },
+                        { "colour1", 0 },
+                        { "colour2", 0 },
+                        { "inspectionInterval", 0 },
+                    };
+                };
+                fixture.semanticInvalidPartitions = {
+                    { "rideType", [](json_t& args) {
+                         args["rideType"] = 33;
+                         args["rideObject"] = 10;
+                     } },
+                    { "rideObject", [](json_t& args) {
+                         args["rideType"] = 33;
+                         args["rideObject"] = 10;
+                     } },
+                    { "entranceObject", [](json_t& args) { args["entranceObject"] = 254; } },
+                    { "colour1", [](json_t& args) { args["colour1"] = 255; } },
+                    { "colour2", [](json_t& args) { args["colour2"] = 255; } },
+                    { "inspectionInterval", [](json_t& args) { args["inspectionInterval"] = 255; } },
+                };
+                fixture.mutateRelevantState = [](GameState_t&, const json_t&) {
+                    for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+                    {
+                        if (GetRide(RideId::FromUnderlying(i)) == nullptr)
+                            RideAllocateAtIndex(RideId::FromUnderlying(i));
+                    }
+                };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) {
+                    return RideProjection(state, args);
+                };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t&) {
+                    return RideListProjection(state);
+                };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideCreateAction>(
+                        args.at("rideType").get<ride_type_t>(), args.at("rideObject").get<ObjectEntryIndex>(),
+                        args.at("colour1").get<uint8_t>(), args.at("colour2").get<uint8_t>(),
+                        args.at("entranceObject").get<ObjectEntryIndex>(),
+                        static_cast<RideInspection>(args.at("inspectionInterval").get<uint8_t>()));
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideDemolishAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor demolition or renewal of a ride";
+                fixture.untrustedParameters = { "ride", "modifyType" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "modifyType", 0 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "modifyType", [](json_t& args) { args["modifyType"] = 2; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) {
+                    return RideProjection(state, args);
+                };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideDemolishAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<GameActions::RideModifyType>(args.at("modifyType").get<uint8_t>()));
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetColourSchemeAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor track colour editing";
+                fixture.untrustedParameters = { "x", "y", "z", "direction", "trackType", "colourScheme" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] {
+                    return json_t{
+                        { "x", values->track.x }, { "y", values->track.y }, { "z", values->track.z },
+                        { "direction", static_cast<uint8_t>(values->track.direction) },
+                        { "trackType", static_cast<uint16_t>(values->trackType) }, { "colourScheme", 0 },
+                    };
+                };
+                fixture.semanticInvalidPartitions = {
+                    { "x", [](json_t& args) { args["x"] = -1; } },
+                    { "y", [](json_t& args) { args["y"] = -1; } },
+                    { "z", [](json_t& args) { args["z"] = -1; } },
+                    { "direction", [](json_t& args) { args["direction"] = 4; } },
+                    { "trackType", [](json_t& args) { args["trackType"] = 65535; } },
+                    { "colourScheme", [](json_t& args) { args["colourScheme"] = 4; } },
+                };
+                fixture.mutateRelevantState = [](GameState_t&, const json_t& args) {
+                    const CoordsXYZD location{
+                        args.at("x").get<int32_t>(), args.at("y").get<int32_t>(), args.at("z").get<int32_t>(),
+                        static_cast<Direction>(args.at("direction").get<uint8_t>()) };
+                    if (auto* track = MapGetTrackElementAtOfType(
+                            location, static_cast<TrackElemType>(args.at("trackType").get<uint16_t>()));
+                        track != nullptr)
+                    {
+                        TileElementRemove(reinterpret_cast<TileElement*>(track));
+                    }
+                };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return TrackProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return TrackProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetColourSchemeAction>(
+                        CoordsXYZD{ args.at("x"), args.at("y"), args.at("z"),
+                            static_cast<Direction>(args.at("direction").get<uint8_t>()) },
+                        static_cast<TrackElemType>(args.at("trackType").get<uint16_t>()),
+                        args.at("colourScheme").get<uint16_t>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetNameAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor ride naming";
+                fixture.untrustedParameters = { "ride", "name" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "name", "S2 Native Ride" } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "name", [](json_t& args) { args["name"] = "This ride name is intentionally too long"; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetNameAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()), args.at("name").get<std::string>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetPriceAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor ride pricing";
+                // isPrimaryPrice is a closed boolean domain; both values are legal and are
+                // exercised by the ordinary/public parity path below.
+                fixture.untrustedParameters = { "ride", "price" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "price", 1 }, { "isPrimaryPrice", true } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "price", [](json_t& args) { args["price"] = -1; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetPriceAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()), args.at("price").get<money64>(),
+                        args.at("isPrimaryPrice").get<bool>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetStatusAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor ride lifecycle status";
+                fixture.untrustedParameters = { "ride", "status" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "status", 0 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "status", [](json_t& args) { args["status"] = 255; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetStatusAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<RideStatus>(args.at("status").get<uint8_t>()));
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideFreezeRatingAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor rating diagnostic override";
+                fixture.untrustedParameters = { "ride", "type", "value" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 100 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "type", [](json_t& args) { args["type"] = 255; } },
+                    { "value", [](json_t& args) { args["value"] = 0; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideFreezeRatingAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<GameActions::RideRatingType>(args.at("type").get<uint8_t>()),
+                        args.at("value").get<RideRating_t>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetAppearanceAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor ride appearance editing";
+                fixture.untrustedParameters = { "ride", "type", "value", "index" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "index", 0 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "type", [](json_t& args) { args["type"] = 255; } },
+                    { "value", [](json_t& args) { args["value"] = 65535; } },
+                    { "value", [](json_t& args) {
+                         args["type"] = static_cast<uint8_t>(GameActions::RideSetAppearanceType::entranceStyle);
+                         args["value"] = 254;
+                     } },
+                    { "index", [](json_t& args) { args["index"] = 255; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetAppearanceAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<GameActions::RideSetAppearanceType>(args.at("type").get<uint8_t>()),
+                        args.at("value").get<uint16_t>(), args.at("index").get<uint32_t>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetVehicleAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor vehicle settings";
+                fixture.untrustedParameters = { "ride", "type", "value", "colour" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "colour", 0 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "type", [](json_t& args) { args["type"] = 255; } },
+                    { "value", [](json_t& args) { args["value"] = 0; } },
+                    { "colour", [](json_t& args) {
+                         args["type"] = 2;
+                         args["value"] = 65535;
+                         args["colour"] = 254;
+                     } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetVehicleAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<GameActions::RideSetVehicleType>(args.at("type").get<uint8_t>()),
+                        args.at("value").get<uint16_t>(), args.at("colour").get<uint8_t>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetSettingAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor operating settings";
+                fixture.untrustedParameters = { "ride", "setting", "value" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "setting", 2 }, { "value", 10 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "setting", [](json_t& args) { args["setting"] = 255; } },
+                    { "value", [](json_t& args) { args["value"] = 251; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return RideProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetSettingAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<GameActions::RideSetSetting>(args.at("setting").get<uint8_t>()),
+                        args.at("value").get<uint8_t>());
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            {
+                auto values = std::make_shared<RideFixtureState>();
+                NativeActionFixture fixture;
+                fixture.registration = "RideSetVisibilityAction";
+                fixture.ownerFamily = "ride-lifecycle-settings";
+                fixture.publicUse = "paused monitor track visibility editing";
+                fixture.untrustedParameters = { "ride", "visiblity" };
+                fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
+                fixture.prepareLegalState = [values](GameState_t& state) { PrepareFixtureRide(state, values); };
+                fixture.legalArgs = [values] { return json_t{ { "ride", values->ride.ToUnderlying() }, { "visiblity", 1 } }; };
+                fixture.semanticInvalidPartitions = {
+                    { "ride", [](json_t& args) { args["ride"] = 65535; } },
+                    { "visiblity", [](json_t& args) { args["visiblity"] = 2; } },
+                };
+                fixture.mutateRelevantState = [values](GameState_t&, const json_t&) { RideDelete(values->ride); };
+                fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) { return TrackProjection(state, args); };
+                fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) { return TrackProjection(state, args); };
+                fixture.makeOrdinaryAction = [](const json_t& args) {
+                    return std::make_unique<GameActions::RideSetVisibilityAction>(
+                        RideId::FromUnderlying(args.at("ride").get<uint16_t>()),
+                        static_cast<GameActions::RideSetVisibilityType>(args.at("visiblity").get<uint8_t>()));
+                };
+                fixtures.push_back(std::move(fixture));
+            }
+
+            return fixtures;
         }
 
         NativeActionFixture MakeEntranceFixture()
@@ -464,7 +1012,7 @@ namespace
             const auto staleQuery = QueryNativeAction(fixture.registration, staleArgs, staleState);
             if (!staleQuery.ok || !staleQuery.value.value("accepted", false))
             {
-                failure = "legal fixture query did not accept before stale-state mutation";
+                failure = "legal fixture query did not accept before stale-state mutation args=" + staleArgs.dump() + " result=" + staleQuery.value.dump();
                 return false;
             }
             fixture.mutateRelevantState(staleState, staleArgs);
@@ -614,6 +1162,88 @@ TEST(NativeActionContractInventory, RejectsZeroExpectedFamilyPopulation)
     const auto result = ValidateInventory(rows, { { "station-track-maze", 0 } }, { "RideEntranceExitPlaceAction" });
     EXPECT_FALSE(result.ok);
     EXPECT_NE(result.failure.find("zero expected population"), std::string::npos);
+}
+
+class NativeActionContractRide : public NativeActionContractHarness
+{
+};
+
+TEST_F(NativeActionContractRide, CreateRejectsMismatchedRideTypeBeforeAllocation)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    _context->GetObjectManager().UnloadAll();
+    ASSERT_NE(
+        _context->GetObjectManager().LoadObject(ObjectEntryDescriptor("rct2.ride.enterp"), 10), nullptr)
+        << "Enterprise object slot 10 fixture is unavailable";
+    auto& state = OpenRCT2::getGameState();
+    state.cheats.sandboxMode = true;
+    state.cheats.disableClearanceChecks = true;
+
+    const auto malformedBefore = RideListProjection(state);
+    const auto malformedCash = state.park.cash;
+    GameActions::RideCreateAction malformed(33, 10, 0, 0, kObjectEntryIndexNull, RideInspection::never);
+    const auto malformedQuery = malformed.Query(state, state.park);
+    const auto malformedExecution = malformed.Execute(state, state.park);
+    EXPECT_NE(malformedQuery.error, GameActions::Status::ok);
+    EXPECT_NE(malformedExecution.error, GameActions::Status::ok);
+    EXPECT_EQ(RideListProjection(state), malformedBefore);
+    EXPECT_EQ(state.park.cash, malformedCash);
+
+    const auto validBefore = RideListProjection(state);
+    GameActions::RideCreateAction valid(81, 10, 0, 0, kObjectEntryIndexNull, RideInspection::never);
+    const auto validQuery = valid.Query(state, state.park);
+    ASSERT_EQ(validQuery.error, GameActions::Status::ok) << "Enterprise type 81/object 10 fixture is unavailable";
+    const auto validExecution = valid.Execute(state, state.park);
+    ASSERT_EQ(validExecution.error, GameActions::Status::ok);
+    EXPECT_NE(RideListProjection(state), validBefore);
+}
+
+TEST_F(NativeActionContractRide, LifecycleSettingsPopulationAndConformance)
+{
+    const auto fixtures = MakeRideFixtures();
+    ASSERT_EQ(fixtures.size(), 11u);
+
+    std::vector<InventoryRow> rows;
+    rows.reserve(fixtures.size());
+    for (const auto& fixture : fixtures)
+    {
+        std::vector<std::string> partitions;
+        for (const auto& partition : fixture.semanticInvalidPartitions)
+            partitions.push_back(partition.parameter);
+        rows.push_back({
+            fixture.registration,
+            fixture.ownerFamily,
+            fixture.publicUse,
+            fixture.withdrawalReason,
+            fixture.legalArgs(),
+            fixture.untrustedParameters,
+            partitions,
+            { { "cash", 0 }, { "rides", json_t::array() } },
+            { { "rides", json_t::array() } },
+        });
+    }
+
+    const std::vector<std::string> registrations{
+        "RideCreateAction",
+        "RideDemolishAction",
+        "RideSetColourSchemeAction",
+        "RideSetNameAction",
+        "RideSetPriceAction",
+        "RideSetStatusAction",
+        "RideFreezeRatingAction",
+        "RideSetAppearanceAction",
+        "RideSetVehicleAction",
+        "RideSetSettingAction",
+        "RideSetVisibilityAction",
+    };
+    const auto inventory = ValidateInventory(rows, { { "ride-lifecycle-settings", 11 } }, registrations);
+    ASSERT_TRUE(inventory.ok) << inventory.failure;
+
+    for (const auto& fixture : fixtures)
+    {
+        std::string failure;
+        ASSERT_TRUE(RunFixture(fixture, failure)) << fixture.registration << ": " << failure;
+    }
 }
 
 TEST_F(NativeActionContractHarness, RetainedEntranceFixtureConforms)

@@ -5266,7 +5266,25 @@ ObjectEntryIndex RideGetEntryIndex(ride_type_t rideType, ObjectEntryIndex rideSu
 {
     auto subType = rideSubType;
 
-    if (subType == kObjectEntryIndexNull)
+    if (subType != kObjectEntryIndexNull)
+    {
+        const auto* rideEntry = GetRideEntryByIndex(subType);
+        if (rideEntry == nullptr)
+        {
+            return kObjectEntryIndexNull;
+        }
+
+        bool supportsRideType = false;
+        for (const auto entryRideType : rideEntry->ride_type)
+        {
+            supportsRideType |= entryRideType == rideType;
+        }
+        if (!supportsRideType)
+        {
+            return kObjectEntryIndexNull;
+        }
+    }
+    else
     {
         auto& objManager = GetContext()->GetObjectManager();
         auto& rideEntries = objManager.GetAllRideEntries(rideType);
