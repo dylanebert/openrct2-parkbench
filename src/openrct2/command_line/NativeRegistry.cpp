@@ -14,6 +14,7 @@
 #include "../actions/GameActionRunner.h"
 #include "../entity/Guest.h"
 #include "../entity/Peep.h"
+#include "../ride/Ride.h"
 #include "../ride/Vehicle.h"
 #include "../object/ObjectManager.h"
 #include "../object/ObjectList.h"
@@ -456,7 +457,7 @@ namespace OpenRCT2::CommandLine
                 const auto guest = vehicle.peep[seat];
                 occupants.push_back(guest.IsNull() ? nullptr : json_t(guest.ToUnderlying()));
             }
-            return {
+            json_t result = {
                 { "id", vehicle.id.ToUnderlying() },
                 { "type", static_cast<uint8_t>(vehicle.type) },
                 { "x", vehicle.x },
@@ -467,6 +468,21 @@ namespace OpenRCT2::CommandLine
                 { "station", vehicle.current_station.ToUnderlying() },
                 { "status", static_cast<uint8_t>(vehicle.status) },
                 { "substate", vehicle.sub_state },
+                { "flatRideAnimationFrame", vehicle.flatRideAnimationFrame },
+                { "currentTime", vehicle.current_time },
+                { "animationIndex", vehicle.current_time },
+                { "animation", {
+                      { "flatRideAnimationFrame", vehicle.flatRideAnimationFrame },
+                      { "currentTime", vehicle.current_time },
+                      { "index", vehicle.current_time },
+                      { "substate", vehicle.sub_state },
+                      { "status", static_cast<uint8_t>(vehicle.status) },
+                      { "orientation", vehicle.orientation },
+                  } },
+                { "vehicleColours", {
+                      { "body", static_cast<uint8_t>(vehicle.colours.Body) },
+                      { "trim", static_cast<uint8_t>(vehicle.colours.Trim) },
+                  } },
                 { "trackLocation", {
                       { "x", vehicle.TrackLocation.x },
                       { "y", vehicle.TrackLocation.y },
@@ -490,6 +506,26 @@ namespace OpenRCT2::CommandLine
                 { "nextFreeSeat", vehicle.next_free_seat },
                 { "occupantSpanSemantics", "raw-engine-active-span; not a validity verdict" },
             };
+
+            const auto* ride = vehicle.GetRide();
+            const auto* rideEntry = vehicle.GetRideEntry();
+            const auto* car = vehicle.Entry();
+            if (ride != nullptr && rideEntry != nullptr && car != nullptr)
+            {
+                const auto orientationQuarter = static_cast<uint8_t>(vehicle.orientation >> 3) % 4;
+                const auto imageOffset = (static_cast<uint32_t>(vehicle.flatRideAnimationFrame) << 2) + orientationQuarter;
+                const auto image = ImageId(
+                    car->base_image_id + imageOffset, ride->vehicleColours[0].Body, ride->vehicleColours[0].Trim);
+                result["spriteSelection"] = {
+                    { "baseImageIndex", car->base_image_id },
+                    { "animationFrame", vehicle.flatRideAnimationFrame },
+                    { "orientationQuarter", orientationQuarter },
+                    { "imageOffset", imageOffset },
+                    { "selectedImageIndex", static_cast<uint32_t>(image.GetIndex()) },
+                    { "stableIdentity", RideRenderDiagnostic::StableSpriteIdentity(image) },
+                };
+            }
+            return result;
         }
 
         json_t NullableDiagnosticId(const uint16_t value)
@@ -564,14 +600,50 @@ namespace OpenRCT2::CommandLine
             };
         }
 
+        json_t RideRenderDiagnosticEnterpriseSelectionValue(const EnterpriseSpriteSelection& selection)
+        {
+            return {
+                { "source", RideRenderDiagnosticSourceValue(selection.source) },
+                { "componentOrdinal", selection.componentOrdinal },
+                { "animation", {
+                      { "flatRideAnimationFrame", selection.flatRideAnimationFrame },
+                      { "currentTime", selection.currentTime },
+                      { "index", selection.currentTime },
+                      { "substate", selection.substate },
+                      { "status", selection.status },
+                      { "orientation", selection.orientation },
+                  } },
+                { "vehicleColours", {
+                      { "body", selection.bodyColour },
+                      { "trim", selection.trimColour },
+                  } },
+                { "remap", {
+                      { "primary", selection.imagePrimary },
+                      { "secondary", selection.imageSecondary },
+                  } },
+                { "sprite", {
+                      { "baseImageIndex", selection.baseImageIndex },
+                      { "animationFrame", selection.flatRideAnimationFrame },
+                      { "orientationQuarter", selection.orientationQuarter },
+                      { "imageOffset", selection.imageOffset },
+                      { "selectedImageIndex", selection.selectedImageIndex },
+                      { "stableIdentity", selection.stableIdentity },
+                  } },
+            };
+        }
+
         json_t RideRenderDiagnosticValue(const RideRenderDiagnostic& diagnostic, std::string_view softwareSurfaceHash)
         {
             json_t records = json_t::array();
             for (const auto& record : diagnostic.Records())
                 records.push_back(RideRenderDiagnosticRecordValue(record));
+            json_t enterpriseSelections = json_t::array();
+            for (const auto& selection : diagnostic.EnterpriseSelections())
+                enterpriseSelections.push_back(RideRenderDiagnosticEnterpriseSelectionValue(selection));
             return {
                 { "surfaceHash", softwareSurfaceHash },
                 { "records", std::move(records) },
+                { "enterpriseSelections", std::move(enterpriseSelections) },
                 { "recordsTruncated", diagnostic.RecordsTruncated() },
                 { "maxRecords", RideRenderDiagnostic::kMaxRecords },
             };
@@ -771,7 +843,10 @@ namespace OpenRCT2::CommandLine
                 { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } }, "engine", json_t::array(), "native", ReadRide },
             { "vehicle", "Authoritative state for one ride vehicle.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
                 { { "id", "entity" }, { "ride", "ride" }, { "x", "map-units" }, { "trackProgress", "track-progress" },
-                  { "numPeeps", "raw-engine-active-span" }, { "nextFreeSeat", "raw-engine-active-span" } },
+                  { "flatRideAnimationFrame", "raw-engine-animation" }, { "currentTime", "raw-engine-animation" },
+                  { "animationIndex", "raw-engine-animation" }, { "vehicleColours", "raw-engine-colours" },
+                  { "spriteSelection", "raw-engine-sprite-selection" }, { "numPeeps", "raw-engine-active-span" },
+                  { "nextFreeSeat", "raw-engine-active-span" } },
                 "engine", json_t::array(), "native", ReadVehicle },
             { "guests", "Authoritative collection of guest entities.", EmptySchema(), { { "id", "entity" }, { "x", "map-units" } },
                 "engine", json_t::array(), "native", ReadGuests },

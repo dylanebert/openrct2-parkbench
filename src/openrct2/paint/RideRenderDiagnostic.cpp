@@ -11,6 +11,7 @@
 #include "../core/String.hpp"
 #include "../drawing/Drawing.Sprite.h"
 
+#include <algorithm>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -101,5 +102,33 @@ namespace OpenRCT2
         }
         _records.push_back(
             { Phase::draw, component, source, componentOrdinal, image, StableSpriteIdentity(image), screenPosition });
+    }
+
+    bool RideRenderDiagnostic::RecordEnterpriseSelection(const EnterpriseSpriteSelection selection)
+    {
+        for (const auto& existing : _enterpriseSelections)
+        {
+            if (existing.source == selection.source && existing.componentOrdinal == selection.componentOrdinal)
+                return false;
+        }
+
+        const auto record = std::find_if(_records.begin(), _records.end(), [&selection](const auto& candidate) {
+            return candidate.phase == Phase::paint && candidate.source == selection.source
+                && candidate.componentOrdinal == selection.componentOrdinal;
+        });
+        if (record == _records.end() || record->stableIdentity.empty() || selection.stableIdentity.empty())
+            return false;
+        if (record->image.GetIndex() != selection.selectedImageIndex
+            || record->image.GetRemap() != selection.imagePrimary
+            || static_cast<uint8_t>(record->image.GetSecondary()) != selection.imageSecondary
+            || record->stableIdentity != selection.stableIdentity)
+            return false;
+        if (selection.selectedImageIndex != selection.baseImageIndex + selection.imageOffset
+            || selection.imageOffset != (static_cast<uint32_t>(selection.flatRideAnimationFrame) << 2)
+                + selection.orientationQuarter)
+            return false;
+
+        _enterpriseSelections.push_back(selection);
+        return true;
     }
 } // namespace OpenRCT2

@@ -42,6 +42,26 @@ namespace OpenRCT2
         bool operator==(const RideRenderDiagnosticSource&) const = default;
     };
 
+    struct EnterpriseSpriteSelection
+    {
+        RideRenderDiagnosticSource source;
+        uint32_t componentOrdinal = 0;
+        uint8_t flatRideAnimationFrame = 0;
+        int16_t currentTime = 0;
+        uint8_t substate = 0;
+        uint8_t status = 0;
+        uint8_t orientation = 0;
+        uint8_t bodyColour = 0;
+        uint8_t trimColour = 0;
+        uint8_t imagePrimary = 0;
+        uint8_t imageSecondary = 0;
+        uint8_t orientationQuarter = 0;
+        uint32_t baseImageIndex = 0;
+        uint32_t imageOffset = 0;
+        uint32_t selectedImageIndex = 0;
+        std::string stableIdentity;
+    };
+
     class RideRenderDiagnostic
     {
     public:
@@ -81,6 +101,14 @@ namespace OpenRCT2
         void RecordDraw(
             RideRenderDiagnosticSource source, Component component, uint32_t componentOrdinal, ImageId image,
             const ScreenCoordsXY& screenPosition);
+        // Records the raw Enterprise selection only when it joins an emitted parent
+        // paint record. This is evidence, not a renderer verdict.
+        bool RecordEnterpriseSelection(EnterpriseSpriteSelection selection);
+
+        const std::vector<EnterpriseSpriteSelection>& EnterpriseSelections() const
+        {
+            return _enterpriseSelections;
+        }
 
         const std::vector<Record>& Records() const
         {
@@ -95,12 +123,14 @@ namespace OpenRCT2
         void Clear()
         {
             _records.clear();
+            _enterpriseSelections.clear();
             _recordsTruncated = false;
         }
 
     private:
         uint32_t NextComponentOrdinal(const RideRenderDiagnosticSource& source) const;
         std::vector<Record> _records;
+        std::vector<EnterpriseSpriteSelection> _enterpriseSelections;
         bool _recordsTruncated = false;
     };
 } // namespace OpenRCT2
