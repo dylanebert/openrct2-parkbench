@@ -11,6 +11,7 @@
 #include "../drawing/ImageId.hpp"
 #include "../world/Location.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -41,6 +42,8 @@ namespace OpenRCT2
     class RideRenderDiagnostic
     {
     public:
+        static constexpr size_t kMaxRecords = 4096;
+
         enum class Phase : uint8_t
         {
             paint,
@@ -75,13 +78,20 @@ namespace OpenRCT2
             return _records;
         }
 
+        bool RecordsTruncated() const
+        {
+            return _recordsTruncated;
+        }
+
         void Clear()
         {
             _records.clear();
+            _recordsTruncated = false;
         }
 
     private:
         uint32_t NextComponentOrdinal(const RideRenderDiagnosticSource& source) const;
         std::vector<Record> _records;
+        bool _recordsTruncated = false;
     };
 } // namespace OpenRCT2

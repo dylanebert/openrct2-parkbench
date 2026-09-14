@@ -4,6 +4,7 @@
 #include "../PlatformEnvironment.h"
 #include "../ReplayManager.h"
 #include "../interface/Screenshot.h"
+#include "../paint/RideRenderDiagnostic.h"
 #include "../Date.h"
 #include "../Game.h"
 #include "../GameState.h"
@@ -485,6 +486,91 @@ namespace OpenRCT2::CommandLine
                                               : json_t(vehicle.next_vehicle_on_ride.ToUnderlying()) },
                 { "seatCount", vehicle.num_seats },
                 { "occupants", std::move(occupants) },
+                { "numPeeps", vehicle.num_peeps },
+                { "nextFreeSeat", vehicle.next_free_seat },
+                { "occupantSpanSemantics", "raw-engine-active-span; not a validity verdict" },
+            };
+        }
+
+        json_t NullableDiagnosticId(const uint16_t value)
+        {
+            return value == RideRenderDiagnosticSource::kNull ? json_t(nullptr) : json_t(value);
+        }
+
+        json_t RideRenderDiagnosticSourceValue(const RideRenderDiagnosticSource& source)
+        {
+            return {
+                { "mapPosition", { { "x", source.mapPosition.x }, { "y", source.mapPosition.y } } },
+                { "ride", NullableDiagnosticId(source.ride) },
+                { "station", NullableDiagnosticId(source.station) },
+                { "trackType", NullableDiagnosticId(source.trackType) },
+                { "elementType", NullableDiagnosticId(source.elementType) },
+                { "entity", NullableDiagnosticId(source.entity) },
+                { "trackSequence", source.trackSequence },
+                { "direction", source.direction },
+                { "entityType", source.entityType },
+            };
+        }
+
+        const char* RideRenderDiagnosticPhaseName(const RideRenderDiagnostic::Phase phase)
+        {
+            switch (phase)
+            {
+                case RideRenderDiagnostic::Phase::paint:
+                    return "paint";
+                case RideRenderDiagnostic::Phase::draw:
+                    return "draw";
+            }
+            return "unknown";
+        }
+
+        const char* RideRenderDiagnosticComponentName(const RideRenderDiagnostic::Component component)
+        {
+            switch (component)
+            {
+                case RideRenderDiagnostic::Component::parent:
+                    return "parent";
+                case RideRenderDiagnostic::Component::child:
+                    return "child";
+                case RideRenderDiagnostic::Component::attached:
+                    return "attached";
+            }
+            return "unknown";
+        }
+
+        json_t RideRenderDiagnosticImageValue(const ImageId& image)
+        {
+            return {
+                { "index", static_cast<uint32_t>(image.GetIndex()) },
+                { "primary", image.GetRemap() },
+                { "secondary", static_cast<uint8_t>(image.GetSecondary()) },
+                { "tertiary", static_cast<uint8_t>(image.GetTertiary()) },
+                { "blended", image.IsBlended() },
+            };
+        }
+
+        json_t RideRenderDiagnosticRecordValue(const RideRenderDiagnostic::Record& record)
+        {
+            return {
+                { "phase", RideRenderDiagnosticPhaseName(record.phase) },
+                { "component", RideRenderDiagnosticComponentName(record.component) },
+                { "source", RideRenderDiagnosticSourceValue(record.source) },
+                { "componentOrdinal", record.componentOrdinal },
+                { "image", RideRenderDiagnosticImageValue(record.image) },
+                { "screenPosition", { { "x", record.screenPosition.x }, { "y", record.screenPosition.y } } },
+            };
+        }
+
+        json_t RideRenderDiagnosticValue(const RideRenderDiagnostic& diagnostic, std::string_view softwareSurfaceHash)
+        {
+            json_t records = json_t::array();
+            for (const auto& record : diagnostic.Records())
+                records.push_back(RideRenderDiagnosticRecordValue(record));
+            return {
+                { "surfaceHash", softwareSurfaceHash },
+                { "records", std::move(records) },
+                { "recordsTruncated", diagnostic.RecordsTruncated() },
+                { "maxRecords", RideRenderDiagnostic::kMaxRecords },
             };
         }
 
@@ -681,7 +767,9 @@ namespace OpenRCT2::CommandLine
             { "ride", "Authoritative state for one ride.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
                 { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } }, "engine", json_t::array(), "native", ReadRide },
             { "vehicle", "Authoritative state for one ride vehicle.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "entity" }, { "ride", "ride" }, { "x", "map-units" }, { "trackProgress", "track-progress" } }, "engine", json_t::array(), "native", ReadVehicle },
+                { { "id", "entity" }, { "ride", "ride" }, { "x", "map-units" }, { "trackProgress", "track-progress" },
+                  { "numPeeps", "raw-engine-active-span" }, { "nextFreeSeat", "raw-engine-active-span" } },
+                "engine", json_t::array(), "native", ReadVehicle },
             { "guests", "Authoritative collection of guest entities.", EmptySchema(), { { "id", "entity" }, { "x", "map-units" } },
                 "engine", json_t::array(), "native", ReadGuests },
             { "guest", "Authoritative state for one guest entity.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
@@ -925,7 +1013,8 @@ namespace OpenRCT2::CommandLine
         return ValidateNativeCaptureView(view, state.mapSize.x, state.mapSize.y);
     }
 
-    NativeDispatchResult CaptureNativeFrame(std::string_view path, const json_t& view)
+    NativeDispatchResult CaptureNativeFrame(
+        std::string_view path, const json_t& view, const bool includeRideRenderDiagnostic)
     {
         if (!NativePathContained(NativeCaptureRoot(), path))
             return Failure("capture_containment", "capture path must remain below the owned capture root");
@@ -950,6 +1039,8 @@ namespace OpenRCT2::CommandLine
         const auto temporaryName = std::string("parkbench-frame-") + std::to_string(getGameState().currentTicks) + ".png";
         const auto temporary = screenshotRoot / temporaryName;
         std::filesystem::remove(temporary, error);
+        RideRenderDiagnostic diagnostic;
+        std::string softwareSurfaceHash;
         try
         {
             CaptureOptions options;
@@ -971,7 +1062,9 @@ namespace OpenRCT2::CommandLine
             };
             options.Zoom = ZoomLevel(selected["zoom"].get<int8_t>());
             options.Rotation = selected["rotation"].get<uint8_t>();
-            CaptureImage(options);
+            CaptureImage(
+                options, includeRideRenderDiagnostic ? &diagnostic : nullptr,
+                includeRideRenderDiagnostic ? &softwareSurfaceHash : nullptr);
         }
         catch (const std::exception& exception)
         {
@@ -992,6 +1085,9 @@ namespace OpenRCT2::CommandLine
                 { "zoom", 0 },
                 { "rotation", 0 },
             };
-        return Success({ { "status", "captured" }, { "path", path }, { "tick", state.currentTicks }, { "view", capturedView } });
+        auto result = json_t{ { "status", "captured" }, { "path", path }, { "tick", state.currentTicks }, { "view", capturedView } };
+        if (includeRideRenderDiagnostic)
+            result["diagnostic"] = RideRenderDiagnosticValue(diagnostic, softwareSurfaceHash);
+        return Success(std::move(result));
     }
 }

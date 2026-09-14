@@ -51,9 +51,14 @@ struct CaptureOptions
     bool Transparent{};
 };
 
-namespace OpenRCT2::Drawing
+namespace OpenRCT2
 {
-    struct RenderTarget;
+    class RideRenderDiagnostic;
+
+    namespace Drawing
+    {
+        struct RenderTarget;
+    }
 }
 
 void ScreenshotCheck();
@@ -64,3 +69,5 @@ void ScreenshotGiant();
 int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOptions* options);
 
 void CaptureImage(const CaptureOptions& options);
+void CaptureImage(
+    const CaptureOptions& options, OpenRCT2::RideRenderDiagnostic* diagnostic, std::string* softwareSurfaceHash);

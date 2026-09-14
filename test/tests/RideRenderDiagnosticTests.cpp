@@ -11,6 +11,24 @@
 
 using namespace OpenRCT2;
 
+TEST(RideRenderDiagnostic, RecordsAreBoundedAndReportTruncation)
+{
+    RideRenderDiagnostic diagnostic;
+    RideRenderDiagnosticSource source;
+
+    for (size_t i = 0; i < RideRenderDiagnostic::kMaxRecords + 1; ++i)
+    {
+        diagnostic.RecordPaint(source, RideRenderDiagnostic::Component::parent, ImageId(100), { 10, 20 });
+    }
+
+    EXPECT_EQ(diagnostic.Records().size(), RideRenderDiagnostic::kMaxRecords);
+    EXPECT_TRUE(diagnostic.RecordsTruncated());
+
+    diagnostic.Clear();
+    EXPECT_TRUE(diagnostic.Records().empty());
+    EXPECT_FALSE(diagnostic.RecordsTruncated());
+}
+
 TEST(RideRenderDiagnostic, CompositeComponentsKeepOneLogicalSource)
 {
     RideRenderDiagnostic diagnostic;
