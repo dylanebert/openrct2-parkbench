@@ -17,6 +17,7 @@
 #include "../world/Location.hpp"
 #include "../world/MapLimits.h"
 #include "Boundbox.h"
+#include "RideRenderDiagnostic.h"
 #include "tile_element/Paint.Tunnel.h"
 
 #include <mutex>
@@ -45,6 +46,8 @@ struct AttachedPaintStruct
     // This is relative to the parent where we are attached to.
     ScreenCoordsXY RelativePos;
     bool IsMasked;
+    OpenRCT2::RideRenderDiagnosticSource DiagnosticSource;
+    uint32_t DiagnosticComponentOrdinal;
 };
 
 struct PaintStructBoundBox
@@ -71,6 +74,9 @@ struct PaintStruct
     uint16_t QuadrantIndex;
     uint8_t SortFlags;
     ViewportInteractionItem InteractionItem;
+    OpenRCT2::RideRenderDiagnosticSource DiagnosticSource;
+    uint32_t DiagnosticComponentOrdinal;
+    OpenRCT2::RideRenderDiagnostic::Component DiagnosticComponent;
 };
 
 struct PaintStringStruct
@@ -164,6 +170,7 @@ struct PaintSessionCore
     uint8_t CurrentRotation;
     uint8_t Flags;
     ViewportInteractionItem InteractionType;
+    OpenRCT2::RideRenderDiagnostic* RideDiagnostic;
 };
 
 struct PaintNodeStorage
@@ -302,6 +309,7 @@ void PaintFloatingMoneyEffect(
 
 PaintSession* PaintSessionAlloc(OpenRCT2::Drawing::RenderTarget& rt, uint32_t viewFlags, uint8_t rotation);
 void PaintSessionFree(PaintSession* session);
+void PaintSessionSetRideRenderDiagnostic(PaintSession& session, OpenRCT2::RideRenderDiagnostic* diagnostic);
 void PaintSessionGenerate(PaintSession& session);
 void PaintSessionArrange(PaintSessionCore& session);
 void PaintDrawStructs(PaintSession& session);
