@@ -81,7 +81,30 @@ static void PaintEnterpriseStructure(
         imageTemplate = imageFlags;
     }
     auto imageId = imageTemplate.WithIndex(rideEntry->Cars[0].base_image_id + imageOffset);
-    PaintAddImageAsParent(session, imageId, offset, bb);
+    auto* paintStruct = PaintAddImageAsParent(session, imageId, offset, bb);
+
+    if (vehicle != nullptr && paintStruct != nullptr && session.RideDiagnostic != nullptr)
+    {
+        const auto orientationQuarter = static_cast<uint8_t>(((vehicle->orientation >> 3) + session.CurrentRotation) % 4);
+        (void)session.RideDiagnostic->RecordEnterpriseSelection({
+            paintStruct->DiagnosticSource,
+            paintStruct->DiagnosticComponentOrdinal,
+            vehicle->flatRideAnimationFrame,
+            vehicle->current_time,
+            vehicle->sub_state,
+            static_cast<uint8_t>(vehicle->status),
+            vehicle->orientation,
+            static_cast<uint8_t>(ride.vehicleColours[0].Body),
+            static_cast<uint8_t>(ride.vehicleColours[0].Trim),
+            imageId.GetRemap(),
+            static_cast<uint8_t>(imageId.GetSecondary()),
+            orientationQuarter,
+            rideEntry->Cars[0].base_image_id,
+            imageOffset,
+            static_cast<uint32_t>(imageId.GetIndex()),
+            RideRenderDiagnostic::StableSpriteIdentity(imageId),
+        });
+    }
 
     if (vehicle != nullptr)
     {

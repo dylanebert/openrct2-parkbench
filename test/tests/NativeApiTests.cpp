@@ -653,6 +653,7 @@ TEST(NativeApiCapture, DiagnosticCaptureReturnsBoundedRecordsAndIsSameTickInert)
     ASSERT_TRUE(diagnostic["surfaceHash"].is_string());
     EXPECT_EQ(diagnostic["surfaceHash"].get<std::string>().size(), 64u);
     ASSERT_TRUE(diagnostic["records"].is_array());
+    ASSERT_TRUE(diagnostic["enterpriseSelections"].is_array());
     EXPECT_GT(diagnostic["records"].size(), 0u);
     EXPECT_LE(diagnostic["records"].size(), diagnostic["maxRecords"]);
     EXPECT_FALSE(diagnostic["recordsTruncated"].get<bool>());
@@ -673,8 +674,12 @@ TEST(NativeApiCapture, DiagnosticCaptureReturnsBoundedRecordsAndIsSameTickInert)
     ASSERT_TRUE(second.ok) << second.code << ": " << second.message;
     EXPECT_EQ(second.value["diagnostic"]["surfaceHash"], diagnostic["surfaceHash"]);
     ASSERT_EQ(second.value["diagnostic"]["records"].size(), diagnostic["records"].size());
+    ASSERT_EQ(second.value["diagnostic"]["enterpriseSelections"].size(), diagnostic["enterpriseSelections"].size());
     for (size_t i = 0; i < diagnostic["records"].size(); ++i)
         EXPECT_EQ(second.value["diagnostic"]["records"][i], diagnostic["records"][i]) << "record " << i;
+    for (size_t i = 0; i < diagnostic["enterpriseSelections"].size(); ++i)
+        EXPECT_EQ(second.value["diagnostic"]["enterpriseSelections"][i], diagnostic["enterpriseSelections"][i])
+            << "selection " << i;
     ASSERT_TRUE(std::filesystem::is_regular_file(secondPath));
     std::ifstream firstFile(firstPath, std::ios::binary);
     std::ifstream secondFile(secondPath, std::ios::binary);
