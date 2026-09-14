@@ -17,6 +17,7 @@
 #include "../../object/StationObject.h"
 #include "../../ride/Ride.h"
 #include "../../ride/RideColour.h"
+#include "../../ride/RideData.h"
 #include "../../ui/WindowManager.h"
 #include "../../world/Map.h"
 
@@ -94,6 +95,14 @@ namespace OpenRCT2::GameActions
                 }
                 break;
             case RideSetAppearanceType::entranceStyle:
+                // Station styles are meaningful only for ride types whose
+                // descriptor exposes an entrance and exit. This is the same
+                // applicability boundary used by ride creation and the UI;
+                // merely loading a StationObject is not sufficient.
+                if (!ride->getRideTypeDescriptor().flags.has(RtdFlag::hasEntranceAndExit))
+                {
+                    return Result(Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_VALUE_OUT_OF_RANGE);
+                }
                 if (_value != kObjectEntryIndexNull
                     && GetContext()->GetObjectManager().GetLoadedObject<StationObject>(_value) == nullptr)
                 {
