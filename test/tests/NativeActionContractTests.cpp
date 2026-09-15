@@ -7,6 +7,7 @@
  *****************************************************************************/
 
 #include "NativeActionContractRideProjection.h"
+#include "NativeActionContractRideProjectionSchema.h"
 #include "TestData.h"
 
 #include <algorithm>
@@ -68,6 +69,14 @@
 using namespace OpenRCT2;
 using namespace OpenRCT2::CommandLine;
 using json_t = nlohmann::json;
+
+namespace OpenRCT2::Testing
+{
+    std::vector<std::string> IndependentKernelPaths(const ProjectionFixtureHandles& handles, bool measurementPresent)
+    {
+        return ProjectionSchema::ExpandKernelPaths(handles, measurementPresent);
+    }
+}
 
 namespace
 {
@@ -570,7 +579,7 @@ namespace
                         else if constexpr (std::is_same_v<Relation, ClearQueueHead>)
                         {
                             return !beforeValue.is_null() && afterValue.is_null()
-                                && beforeValue == before.at("watch").at("fixtureIds").at("queueGuest");
+                                && beforeValue == before.at("watch").at("queueTailGuest");
                         }
                         else if constexpr (std::is_same_v<Relation, InsertedEntranceElement>)
                         {
@@ -792,45 +801,57 @@ namespace
         banner->textColour = Drawing::TextColour::white;
         banner->position = { 1, 1 };
 
-        auto* linkedGuest = state.entities.CreateEntity<Guest>();
-        auto* queueGuest = state.entities.CreateEntity<Guest>();
-        if (linkedGuest == nullptr || queueGuest == nullptr)
+        auto* watchingGuest = state.entities.CreateEntity<Guest>();
+        auto* seatedGuest = state.entities.CreateEntity<Guest>();
+        auto* queueTailGuest = state.entities.CreateEntity<Guest>();
+        auto* queueHeadGuest = state.entities.CreateEntity<Guest>();
+        if (watchingGuest == nullptr || seatedGuest == nullptr || queueTailGuest == nullptr || queueHeadGuest == nullptr)
             return fail("guest entity capacity is unavailable");
-        linkedGuest->State = PeepState::watching;
-        linkedGuest->SubState = 3;
-        linkedGuest->CurrentRide = rideId;
-        linkedGuest->CurrentRideStation = StationIndex::FromUnderlying(0);
-        linkedGuest->CurrentTrain = 0;
-        linkedGuest->CurrentCar = 0;
-        linkedGuest->CurrentSeat = 0;
-        linkedGuest->TimeToStand = 73;
-        linkedGuest->guestNextInQueue = queueGuest->id;
-        linkedGuest->timeInQueue = 37;
-        linkedGuest->rejoinQueueTimeout = 4;
-        linkedGuest->previousRide = rideId;
-        linkedGuest->previousRideTimeOut = 8;
-        linkedGuest->guestHeadingToRideId = rideId;
-        linkedGuest->voucherRideId = rideId;
-        linkedGuest->photo1RideRef = rideId;
-        linkedGuest->photo2RideRef = rideId;
-        linkedGuest->photo3RideRef = rideId;
-        linkedGuest->photo4RideRef = rideId;
-        linkedGuest->favouriteRide = rideId;
-        linkedGuest->PeepFlags = PEEP_FLAGS_LEAVING_PARK;
-        linkedGuest->giveItem(ShopItem::voucher);
-        linkedGuest->giveItem(ShopItem::photo);
-        linkedGuest->giveItem(ShopItem::photo2);
-        linkedGuest->giveItem(ShopItem::photo3);
-        linkedGuest->giveItem(ShopItem::photo4);
-        linkedGuest->thoughts[0].type = PeepThoughtType::wasGreat;
-        linkedGuest->thoughts[0].rideId = rideId;
-        linkedGuest->thoughts[0].freshness = 1;
-        linkedGuest->thoughts[0].fresh_timeout = 2;
-        queueGuest->State = PeepState::queuing;
-        queueGuest->SubState = 2;
-        queueGuest->CurrentRide = rideId;
-        queueGuest->CurrentRideStation = StationIndex::FromUnderlying(0);
-        RideUse::GetHistory().Add(linkedGuest->id, rideId);
+        const auto stationZero = StationIndex::FromUnderlying(0);
+        watchingGuest->State = PeepState::watching;
+        watchingGuest->SubState = 3;
+        watchingGuest->CurrentRide = rideId;
+        watchingGuest->CurrentRideStation = stationZero;
+        watchingGuest->TimeToStand = 73;
+        watchingGuest->StandingFlags = 5;
+        watchingGuest->rejoinQueueTimeout = 4;
+        watchingGuest->previousRide = rideId;
+        watchingGuest->previousRideTimeOut = 8;
+        watchingGuest->guestHeadingToRideId = rideId;
+        watchingGuest->voucherRideId = rideId;
+        watchingGuest->photo1RideRef = rideId;
+        watchingGuest->photo2RideRef = rideId;
+        watchingGuest->photo3RideRef = rideId;
+        watchingGuest->photo4RideRef = rideId;
+        watchingGuest->favouriteRide = rideId;
+        watchingGuest->PeepFlags = PEEP_FLAGS_LEAVING_PARK;
+        watchingGuest->giveItem(ShopItem::voucher);
+        watchingGuest->giveItem(ShopItem::photo);
+        watchingGuest->giveItem(ShopItem::photo2);
+        watchingGuest->giveItem(ShopItem::photo3);
+        watchingGuest->giveItem(ShopItem::photo4);
+        watchingGuest->thoughts[0].type = PeepThoughtType::wasGreat;
+        watchingGuest->thoughts[0].rideId = rideId;
+        watchingGuest->thoughts[0].freshness = 1;
+        watchingGuest->thoughts[0].fresh_timeout = 2;
+        seatedGuest->State = PeepState::onRide;
+        seatedGuest->SubState = static_cast<uint8_t>(PeepRideSubState::onRide);
+        seatedGuest->CurrentRide = rideId;
+        seatedGuest->CurrentRideStation = stationZero;
+        seatedGuest->CurrentTrain = 0;
+        seatedGuest->CurrentCar = 0;
+        seatedGuest->CurrentSeat = 0;
+        queueTailGuest->State = PeepState::queuing;
+        queueTailGuest->SubState = static_cast<uint8_t>(PeepRideSubState::inQueue);
+        queueTailGuest->CurrentRide = rideId;
+        queueTailGuest->CurrentRideStation = stationZero;
+        queueTailGuest->guestNextInQueue = queueHeadGuest->id;
+        queueTailGuest->timeInQueue = 37;
+        queueHeadGuest->State = PeepState::queuing;
+        queueHeadGuest->SubState = static_cast<uint8_t>(PeepRideSubState::inQueue);
+        queueHeadGuest->CurrentRide = rideId;
+        queueHeadGuest->CurrentRideStation = stationZero;
+        RideUse::GetHistory().Add(watchingGuest->id, rideId);
 
         auto* head = state.entities.CreateEntity<Vehicle>();
         auto* tail = state.entities.CreateEntity<Vehicle>();
@@ -840,20 +861,26 @@ namespace
         tail->SubType = Vehicle::Type::tail;
         head->ride = tail->ride = rideId;
         head->next_vehicle_on_train = tail->id;
-        head->prev_vehicle_on_ride = EntityId::GetNull();
+        head->prev_vehicle_on_ride = tail->id;
         head->next_vehicle_on_ride = tail->id;
         tail->next_vehicle_on_train = EntityId::GetNull();
         tail->prev_vehicle_on_ride = head->id;
-        tail->next_vehicle_on_ride = EntityId::GetNull();
+        tail->next_vehicle_on_ride = head->id;
         head->status = Vehicle::Status::waitingForPassengers;
-        tail->status = Vehicle::Status::travelling;
+        tail->status = Vehicle::Status::waitingForPassengers;
         head->num_seats = tail->num_seats = 2;
         head->num_peeps = 1;
         tail->num_peeps = 0;
         head->next_free_seat = 1;
         tail->next_free_seat = 0;
-        head->peep[0] = linkedGuest->id;
+        head->peep[0] = seatedGuest->id;
         tail->peep[0] = EntityId::GetNull();
+        head->current_station = StationIndex::FromUnderlying(0);
+        tail->current_station = StationIndex::FromUnderlying(0);
+        head->track_progress = 11;
+        tail->track_progress = 22;
+        head->sub_state = 1;
+        tail->sub_state = 2;
         head->colours = { Drawing::Colour::brightRed, Drawing::Colour::darkBlue, Drawing::Colour::brightGreen };
         tail->colours = { Drawing::Colour::yellow, Drawing::Colour::brightPurple, Drawing::Colour::lightOrange };
         head->flags.set(VehicleFlag::testing);
@@ -870,25 +897,22 @@ namespace
         ride->numCarsPerTrain = 2;
         ride->maxTrains = std::max<uint8_t>(ride->maxTrains, 2);
         auto& station = ride->getStation(StationIndex::FromUnderlying(0));
-        station.LastPeepInQueue = queueGuest->id;
-        station.QueueLength = 37;
+        station.LastPeepInQueue = queueTailGuest->id;
+        station.QueueLength = 2;
         station.QueueTime = 37;
-        ride->satisfaction = 17;
-        ride->popularity = 18;
-        ride->upkeepCost = 19;
-        ride->unreliabilityFactor = 20;
-        ride->incomePerHour = 21;
-        ride->music = 1;
-        ride->musicTuneId = 2;
-        ride->musicPosition = 3;
-        ride->windowInvalidateFlags.set(RideInvalidateFlag::music);
+        ride->flags.set(RideFlag::fixedRatings);
+        ride->currentIssues = 9;
+        ride->lastIssueTime = 10;
         if (ride->measurement == nullptr)
             ride->measurement = std::make_unique<RideMeasurement>();
         if (auto* measurement = ride->measurement.get(); measurement != nullptr)
         {
+            measurement->flags.holder = 3;
             measurement->num_items = 2;
             measurement->current_item = 1;
             measurement->last_use_tick = 44;
+            measurement->vehicle_index = 0;
+            measurement->current_station = stationZero;
             measurement->vertical[0] = 1;
             measurement->vertical[1] = -2;
             measurement->lateral[0] = 3;
@@ -969,21 +993,69 @@ namespace
         if (*tileRoles[0] == *tileRoles[1] || *tileRoles[0] == *tileRoles[2] || *tileRoles[0] == *tileRoles[3]
             || *tileRoles[1] == *tileRoles[2] || *tileRoles[1] == *tileRoles[3] || *tileRoles[2] == *tileRoles[3])
             return fail("track, entrance, exit and queue roles are not pairwise distinct");
+        const auto* trackElement = MapGetFirstElementAt(*tileRoles[0]);
+        while (trackElement != nullptr && trackElement->asTrack() == nullptr && !trackElement->isLastForTile())
+            ++trackElement;
+        if (trackElement == nullptr || trackElement->asTrack() == nullptr)
+            return fail("identified track role cannot be read back");
+        const auto* track = trackElement->asTrack();
+        const CoordsXY trackPosition{ tileRoles[0]->x * kCoordsXYStep, tileRoles[0]->y * kCoordsXYStep };
+        const auto trackTypeAndDirection = static_cast<uint16_t>(track->GetTrackType())
+            | (static_cast<uint16_t>(track->getDirection()) << 8);
+        head->TrackLocation = { trackPosition, trackElement->baseHeight };
+        tail->TrackLocation = { trackPosition, trackElement->baseHeight };
+        head->TrackTypeAndDirection = trackTypeAndDirection;
+        tail->TrackTypeAndDirection = trackTypeAndDirection;
 
         ProjectionFixtureHandles handles;
         handles.ride = rideId;
-        handles.linkedGuest = linkedGuest->id;
-        handles.queueGuest = queueGuest->id;
+        handles.linkedGuest = watchingGuest->id;
+        handles.queueGuest = queueHeadGuest->id;
+        handles.seatedGuest = seatedGuest->id;
+        handles.watchingGuest = watchingGuest->id;
+        handles.queueTailGuest = queueTailGuest->id;
+        handles.queueHeadGuest = queueHeadGuest->id;
         handles.vehicleHead = head->id;
         handles.vehicleTail = tail->id;
         handles.banner = banner->id;
         handles.campaign = { ADVERTISING_CAMPAIGN_RIDE, rideId };
         handles.recentNews = { false, 0 };
         handles.archivedNews = { true, 0 };
+        handles.expectedTrackZ = trackElement->baseHeight;
+        handles.expectedTrackTypeAndDirection = trackTypeAndDirection;
+        handles.expectedHeadFlags = head->flags.holder;
+        handles.expectedTailFlags = tail->flags.holder;
         handles.tiles = { OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::track, *tileRoles[0] },
                           OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::entrance, *tileRoles[1] },
                           OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::exit, *tileRoles[2] },
                           OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::queue, *tileRoles[3] } };
+        for (auto& tile : handles.tiles)
+        {
+            auto* element = MapGetFirstElementAt(tile.coords);
+            while (element != nullptr)
+            {
+                const bool roleMatch = (tile.role == OpenRCT2::Testing::TileRole::track && element->asTrack() != nullptr)
+                    || ((tile.role == OpenRCT2::Testing::TileRole::entrance || tile.role == OpenRCT2::Testing::TileRole::exit)
+                        && element->asEntrance() != nullptr
+                        && element->asEntrance()->GetEntranceType()
+                            == (tile.role == OpenRCT2::Testing::TileRole::exit ? ENTRANCE_TYPE_RIDE_EXIT : ENTRANCE_TYPE_RIDE_ENTRANCE))
+                    || (tile.role == OpenRCT2::Testing::TileRole::queue && element->asPath() != nullptr && element->asPath()->IsQueue());
+                if (roleMatch && element->GetRideIndex() == rideId)
+                {
+                    tile.expectedType = static_cast<uint8_t>(element->getType());
+                    tile.expectedFlags = static_cast<uint8_t>(element->flags);
+                    tile.expectedBaseHeight = element->baseHeight;
+                    tile.expectedClearanceHeight = element->clearanceHeight;
+                    tile.expectedOwner = element->owner;
+                    tile.expectedDirection = static_cast<uint8_t>(element->getDirection());
+                    const auto* raw = reinterpret_cast<const uint8_t*>(element);
+                    tile.expectedBytes.assign(raw, raw + kTileElementSize);
+                    break;
+                }
+                if (element->isLastForTile()) break;
+                ++element;
+            }
+        }
         if (Park::CalculateParkValue(state.park, state) == 12345)
             return fail("calculated park value did not differ from stored witness");
         OpenRCT2::Testing::SetProjectionFixtureHandles(handles);
@@ -3341,7 +3413,7 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     EXPECT_EQ(projection["campaigns"][0]["ride"], ride->id.ToUnderlying());
     ASSERT_FALSE(projection["banners"].empty());
     EXPECT_EQ(projection["banners"][0]["text"], "S2 target banner");
-    EXPECT_TRUE(projection["banners"][0]["linkedToRide"]);
+    EXPECT_EQ(projection["banners"][0]["flags"], 4);
     EXPECT_EQ(projection["banners"][0]["colour"], static_cast<uint8_t>(Drawing::Colour::brightRed));
     EXPECT_EQ(projection["banners"][0]["textColour"], static_cast<uint8_t>(Drawing::TextColour::white));
     const auto findRecord = [](const json_t& records, uint16_t id) -> const json_t* {
@@ -3354,11 +3426,11 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     const auto* linkedGuest = findRecord(projection["guests"], handles.linkedGuest.ToUnderlying());
     ASSERT_NE(linkedGuest, nullptr);
     EXPECT_EQ(linkedGuest->at("currentRide"), ride->id.ToUnderlying());
-    EXPECT_EQ(linkedGuest->at("queuePredecessor"), handles.queueGuest.ToUnderlying());
-    EXPECT_EQ(linkedGuest->at("queueTime"), 37);
+    EXPECT_EQ(linkedGuest->at("queuePredecessor"), 0);
+    EXPECT_EQ(linkedGuest->at("state"), static_cast<uint8_t>(PeepState::watching));
     EXPECT_EQ(linkedGuest->at("rejoinQueueTimeout"), 4);
     EXPECT_EQ(linkedGuest->at("previousRideTimeout"), 8);
-    EXPECT_EQ(linkedGuest->at("timeToStand"), 73);
+    EXPECT_EQ(linkedGuest->at("standing")["timeToStand"], 73);
     EXPECT_NE(linkedGuest->at("itemFlags"), 0);
     ASSERT_FALSE(linkedGuest->at("thoughts").empty());
     EXPECT_EQ(linkedGuest->at("thoughts")[0]["freshness"], 1);
@@ -3380,17 +3452,14 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     EXPECT_EQ(projection["finance"]["valueHistory"][7], 11900);
     const auto* targetRide = findRecord(projection["rides"], handles.ride.ToUnderlying());
     ASSERT_NE(targetRide, nullptr);
-    EXPECT_EQ(targetRide->at("numStations"), ride->numStations);
+    EXPECT_EQ(targetRide->at("status"), static_cast<uint8_t>(ride->status));
     EXPECT_TRUE(targetRide->contains("maxTrains"));
     EXPECT_TRUE(targetRide->contains("vehicleChangeTimeout"));
-    EXPECT_TRUE(targetRide->contains("inspectionInterval"));
+    EXPECT_TRUE(targetRide->contains("currentIssues"));
     EXPECT_TRUE(targetRide->contains("fixedRatings"));
-    EXPECT_TRUE(targetRide->contains("cableLiftLoc"));
-    EXPECT_TRUE(targetRide->contains("musicPosition"));
-    EXPECT_TRUE(projection["watch"].contains("tileRoles"));
-    EXPECT_EQ(projection["watch"]["tileRoles"].size(), 4);
+    EXPECT_TRUE(targetRide->contains("measurement"));
     EXPECT_TRUE(projection["watch"].contains("tiles"));
-    EXPECT_TRUE(projection["watch"].contains("recentNewsSlots"));
+    EXPECT_TRUE(projection["watch"].contains("recentSlot"));
 }
 
 TEST_F(NativeActionContractHarness, PopulatedProjectionIdentityAndFieldMutationsRed)
@@ -3406,6 +3475,19 @@ TEST_F(NativeActionContractHarness, PopulatedProjectionIdentityAndFieldMutations
         { "unwatched removed entrance", OpenRCT2::Testing::ProjectionFixtureMutation::omitRemovedEntranceWatch },
         { "queue time", OpenRCT2::Testing::ProjectionFixtureMutation::alterQueueTime },
         { "banner position", OpenRCT2::Testing::ProjectionFixtureMutation::alterBannerPosition },
+        { "ride ring", OpenRCT2::Testing::ProjectionFixtureMutation::breakRideRing },
+        { "seated occupant slot", OpenRCT2::Testing::ProjectionFixtureMutation::moveSeatedOccupant },
+        { "seated current car", OpenRCT2::Testing::ProjectionFixtureMutation::alterSeatedCurrentCar },
+        { "watcher occupant union", OpenRCT2::Testing::ProjectionFixtureMutation::putWatchingGuestInVehicle },
+        { "vehicle position", OpenRCT2::Testing::ProjectionFixtureMutation::alterVehiclePosition },
+        { "vehicle flags", OpenRCT2::Testing::ProjectionFixtureMutation::alterVehicleFlags },
+        { "unused occupant slot", OpenRCT2::Testing::ProjectionFixtureMutation::alterUnusedOccupant },
+        { "measurement metadata", OpenRCT2::Testing::ProjectionFixtureMutation::alterMeasurementMetadata },
+        { "stored park value", OpenRCT2::Testing::ProjectionFixtureMutation::alterParkValue },
+        { "campaign flags", OpenRCT2::Testing::ProjectionFixtureMutation::alterCampaignFlags },
+        { "banner flags", OpenRCT2::Testing::ProjectionFixtureMutation::alterBannerFlags },
+        { "typed tile record", OpenRCT2::Testing::ProjectionFixtureMutation::alterTileRole },
+        { "queue cardinality", OpenRCT2::Testing::ProjectionFixtureMutation::breakQueueCardinality },
     };
     for (const auto& [name, mutation] : mutations)
     {
@@ -3418,18 +3500,45 @@ TEST_F(NativeActionContractHarness, PopulatedProjectionIdentityAndFieldMutations
     }
 }
 
+static OpenRCT2::Testing::ProjectionFieldInstance KernelOmissionFor(std::string_view name)
+{
+    using namespace OpenRCT2::Testing;
+    const ProjectionRecordIdentity ride{ ProjectionRecordKind::ride, 0 };
+    const ProjectionRecordIdentity finance{ ProjectionRecordKind::finance, 0 };
+    if (name == "ride.station.QueueTime")
+        return { ProjectionField::queueTime, ProjectionRecordIdentity{ ProjectionRecordKind::ride, 0, TileRole::track, false, 0 }, {} };
+    if (name == "tile.track.ride")
+        return { ProjectionField::ride, ProjectionRecordIdentity{ ProjectionRecordKind::tile, 0, TileRole::track }, {} };
+    if (name == "tile.entrance.direction")
+        return { ProjectionField::value, ProjectionRecordIdentity{ ProjectionRecordKind::tile, 0, TileRole::entrance }, { 16, 0 } };
+    if (name == "tile.queue.edges")
+        return { ProjectionField::value, ProjectionRecordIdentity{ ProjectionRecordKind::tile, 0, TileRole::queue }, { 9, 0 } };
+    if (name == "finance.expenditureTable[0][rideConstruction]")
+        return { ProjectionField::financeCell, finance, { 0, static_cast<uint16_t>(ExpenditureType::rideConstruction) } };
+    if (name == "finance.valueHistory[7]")
+        return { ProjectionField::historyCell, finance, { 7, 0 } };
+    if (name == "finance.expenditureTable[3][rideRunningCosts]")
+        return { ProjectionField::financeCell, finance, { 3, static_cast<uint16_t>(ExpenditureType::rideRunningCosts) } };
+    if (name == "vehicle.occupants[7]")
+        return { ProjectionField::occupant, ProjectionRecordIdentity{ ProjectionRecordKind::vehicle, 4 }, { 7, 0 } };
+    if (name == "maxTrains") return { ProjectionField::value, ride, { 24, 0 } };
+    if (name == "vehicleChangeTimeout") return { ProjectionField::value, ride, { 25, 0 } };
+    if (name == "fixedRatings") return { ProjectionField::flags, ride, { 2, 0 } };
+    if (name == "measurement") return { ProjectionField::value, ride, { 29, 0 } };
+    if (name == "music.invalidation") return { ProjectionField::flags, ride, { 5, 0 } };
+    return { ProjectionField::value, ride, {} };
+}
+
 TEST_F(NativeActionContractHarness, PopulatedProjectionRequiredFieldMutationsRed)
 {
     const std::vector<std::string> rideFields{
-        "maxTrains", "vehicleChangeTimeout", "inspectionInterval", "fixedRatings", "cableLift", "music", "musicEnabled",
-        "satisfaction", "popularity", "upkeepCost", "unreliabilityFactor", "incomePerHour", "measurement",
-        "music.invalidation",
+        "maxTrains", "vehicleChangeTimeout", "fixedRatings", "measurement", "music.invalidation",
     };
     for (const auto& field : rideFields)
     {
         auto fixture = MakeEntranceFixture();
-        const auto omission = field == "music.invalidation" ? "ride.music.invalidation" : "ride." + field;
-        OpenRCT2::Testing::SetProjectionSerializerOmission(omission);
+        const auto omission = field == "music.invalidation" ? std::string("music.invalidation") : field;
+        OpenRCT2::Testing::SetProjectionSerializerOmission(KernelOmissionFor(omission));
         std::string failure;
         EXPECT_FALSE(RunFixture(fixture, failure)) << field;
         EXPECT_FALSE(failure.empty()) << field;
@@ -3437,10 +3546,11 @@ TEST_F(NativeActionContractHarness, PopulatedProjectionRequiredFieldMutationsRed
     }
     for (const auto& field : { std::string("ride.station.QueueTime"), std::string("tile.track.ride"),
                                std::string("tile.entrance.direction"), std::string("tile.queue.edges"),
-                               std::string("finance.expenditureTable[0][rideConstruction]"), std::string("finance.valueHistory[7]") })
+                               std::string("finance.expenditureTable[0][rideConstruction]"), std::string("finance.expenditureTable[3][rideRunningCosts]"),
+                               std::string("finance.valueHistory[7]"), std::string("vehicle.occupants[7]") })
     {
         auto fixture = MakeEntranceFixture();
-        OpenRCT2::Testing::SetProjectionSerializerOmission(field);
+        OpenRCT2::Testing::SetProjectionSerializerOmission(KernelOmissionFor(field));
         std::string failure;
         EXPECT_FALSE(RunFixture(fixture, failure)) << field;
         EXPECT_FALSE(failure.empty()) << field;
