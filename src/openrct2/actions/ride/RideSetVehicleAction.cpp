@@ -87,6 +87,15 @@ namespace OpenRCT2::GameActions
             return Result(Status::notClosed, errTitle, STR_MUST_BE_CLOSED_FIRST);
         }
 
+        // Execute clears construction state before applying the requested value;
+        // prove the current ride entry before any type-specific or cheat-owned
+        // branch can reach that clearing path.
+        const auto* currentRideEntry = GetRideEntryByIndex(ride->subtype);
+        if (currentRideEntry == nullptr)
+        {
+            return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
+
         switch (_type)
         {
             case RideSetVehicleType::numTrains:
@@ -97,14 +106,13 @@ namespace OpenRCT2::GameActions
                 break;
             case RideSetVehicleType::numCarsPerTrain:
             {
-                const auto* rideEntry = GetRideEntryByIndex(ride->subtype);
                 // The UI deliberately exposes the extended train-length path
                 // while this cheat is enabled. Keep descriptor bounds for
                 // ordinary play, but retain the actual byte/storage and engine
                 // safety bounds when the cheat owns the wider domain.
                 const bool outsideStorageBounds = _value == 0 || _value > std::numeric_limits<uint8_t>::max();
-                const bool outsideDescriptorBounds = rideEntry == nullptr
-                    || _value < rideEntry->min_cars_in_train || _value > rideEntry->max_cars_in_train;
+                const bool outsideDescriptorBounds = _value < currentRideEntry->min_cars_in_train
+                    || _value > currentRideEntry->max_cars_in_train;
                 if (outsideStorageBounds || (!gameState.cheats.disableTrainLengthLimit && outsideDescriptorBounds))
                 {
                     return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
