@@ -944,7 +944,7 @@ protected:
         ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.ptct1"), 10), nullptr);
         ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.ptct2"), 11), nullptr);
         const auto& entries = objectManager.GetAllRideEntries(RIDE_TYPE_WOODEN_ROLLER_COASTER);
-        ASSERT_EQ(entries.size(), 2U);
+        ASSERT_EQ(entries.size(), 2u);
         EXPECT_EQ(entries[0], static_cast<ObjectEntryIndex>(10));
         EXPECT_EQ(entries[1], static_cast<ObjectEntryIndex>(11));
         for (const auto entryIndex : entries)
@@ -1095,7 +1095,7 @@ TEST_F(NativeActionContractRideCreate, NullSubtypeSelectionHonorsResearchAndIgno
         LoadResearchObjects();
         auto& state = OpenRCT2::getGameState();
         const auto& entries = GetContext()->GetObjectManager().GetAllRideEntries(RIDE_TYPE_WOODEN_ROLLER_COASTER);
-        ASSERT_EQ(entries.size(), 2U);
+        ASSERT_EQ(entries.size(), 2u);
         ASSERT_FALSE(GetRideTypeDescriptor(RIDE_TYPE_WOODEN_ROLLER_COASTER).flags.has(RtdFlag::listVehiclesSeparately));
         SetEveryRideEntryNotInvented();
         for (const auto entry : entries)
