@@ -27,6 +27,7 @@
 #include <openrct2/actions/ride/RideCreateAction.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
+#include <openrct2/actions/ride/RideSetPriceAction.h>
 #include <openrct2/actions/track/TrackPlaceAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/localisation/StringIds.h>
@@ -1717,4 +1718,267 @@ TEST_F(NativeActionContractTrackPlace, ExecuteRequeriesOccupiedTouchedTile)
     ASSERT_TRUE(executed.ok) << executed.message;
     EXPECT_EQ(executed.value, expected);
     EXPECT_EQ(TrackPlaceProjection(state, rideId), before);
+}
+
+namespace
+{
+    json_t RideSetPriceResultProjection(const GameActions::Result& result)
+    {
+        return {
+            { "status", static_cast<uint16_t>(result.error) },
+            { "accepted", result.error == GameActions::Status::ok },
+            { "cost", result.cost },
+            { "position", { { "x", result.position.x }, { "y", result.position.y }, { "z", result.position.z } } },
+        };
+    }
+
+    json_t RideSetPriceRejectedResult(GameActions::Status status, StringId title, StringId message, std::string_view code)
+    {
+        const GameActions::Result expected(status, title, message);
+        auto result = RideSetPriceResultProjection(expected);
+        result["action"] = "RideSetPriceAction";
+        result["rejection"] = {
+            { "code", code },
+            { "title", expected.getErrorTitle() },
+            { "message", expected.getErrorMessage() },
+            { "detail", { { "status", static_cast<uint16_t>(status) } } },
+        };
+        return result;
+    }
+
+    json_t RideSetPriceProjection(const GameState_t& state, RideId rideId)
+    {
+        json_t projection = { { "cash", state.park.cash } };
+        const auto* ride = GetRide(rideId);
+        if (ride == nullptr)
+        {
+            projection["ride"] = nullptr;
+            return projection;
+        }
+        projection["ride"] = {
+            { "prices", { ride->price[0], ride->price[1] } },
+            { "overallView",
+              ride->overallView.IsNull() ? json_t(nullptr)
+                                         : json_t{ { "x", ride->overallView.x }, { "y", ride->overallView.y } } },
+            { "tileElements", TileElementCount(ride->overallView.ToTileCentre()) },
+        };
+        return projection;
+    }
+
+    class NativeActionContractRideSetPrice : public testing::Test
+    {
+    protected:
+        std::unique_ptr<IContext> _context;
+
+        void LoadPark()
+        {
+            _context.reset();
+            gOpenRCT2Headless = true;
+            gOpenRCT2NoGraphics = true;
+            _context = OpenRCT2::CreateContext();
+            ASSERT_NE(_context, nullptr);
+            const auto resources = std::filesystem::current_path() / "OpenRCT2.app/Contents/Resources";
+            _context->GetPlatformEnvironment().SetBasePath(OpenRCT2::DirBase::openrct2, resources.string());
+            ASSERT_TRUE(_context->Initialise());
+
+            auto importer = OpenRCT2::ParkImporter::CreateS6(_context->GetObjectRepository());
+            auto loadResult = importer->LoadSavedGame(TestData::GetParkPath("small_park_with_ferris_wheel.sv6").c_str(), false);
+            _context->GetObjectManager().LoadObjects(loadResult.RequiredObjects);
+            importer->Import(OpenRCT2::getGameState());
+        }
+
+        void LoadEnterprisePark()
+        {
+            LoadPark();
+            auto& objectManager = GetContext()->GetObjectManager();
+            std::vector<ObjectEntryDescriptor> unload;
+            if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, 10); object != nullptr)
+                unload.push_back(object->GetDescriptor());
+            const auto enterpriseSlot = objectManager.GetLoadedObjectEntryIndex("rct2.ride.enterp");
+            if (enterpriseSlot != kObjectEntryIndexNull && enterpriseSlot != 10)
+            {
+                if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, enterpriseSlot); object != nullptr)
+                    unload.push_back(object->GetDescriptor());
+            }
+            if (!unload.empty())
+                objectManager.UnloadObjects(unload);
+            ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.enterp"), 10), nullptr);
+            ASSERT_NE(GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10)), nullptr);
+            ASSERT_EQ(
+                GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10))->GetFirstNonNullRideType(),
+                static_cast<ride_type_t>(81));
+        }
+
+        void PrepareEnterpriseRide(GameState_t& state, RideId& rideId, json_t& args, bool primary, money64 price)
+        {
+            state.cheats.sandboxMode = true;
+            state.cheats.disableClearanceChecks = true;
+            rideId = GetNextFreeRideId();
+            const auto created = ExecuteNativeAction("RideCreateAction", RideCreateArgs(), state);
+            ASSERT_TRUE(created.ok) << created.message;
+            ASSERT_TRUE(created.value["accepted"]) << created.value.dump();
+
+            auto* ride = GetRide(rideId);
+            ASSERT_NE(ride, nullptr);
+            ASSERT_EQ(ride->type, static_cast<ride_type_t>(81));
+            ASSERT_EQ(ride->subtype, static_cast<ObjectEntryIndex>(10));
+            ride->status = RideStatus::closed;
+
+            // TrackPlaceAction is the reviewed owner path that gives this ride a
+            // literal, populated overall-view tile for RideSetPrice's result.
+            const auto placed = ExecuteNativeAction("TrackPlaceAction", TrackPlaceArgs(rideId), state);
+            ASSERT_TRUE(placed.ok) << placed.message;
+            ASSERT_TRUE(placed.value["accepted"]) << placed.value.dump();
+            ASSERT_EQ(ride->overallView, (CoordsXY{ 416, 416 }));
+            ASSERT_NE(MapGetFirstElementAt(ride->overallView.ToTileCentre()), nullptr);
+
+            ride->price[0] = 100;
+            ride->price[1] = 200;
+            // Common-price synchronization across other rides, shops and toilets is
+            // engine semantics and is intentionally not claimed by this owner fixture.
+            args = {
+                { "ride", rideId.ToUnderlying() },
+                { "price", price },
+                { "isPrimaryPrice", primary },
+            };
+        }
+
+        void ExpectRejected(
+            GameState_t& state, RideId observedRide, const json_t& args, GameActions::Status status, StringId message)
+        {
+            const auto before = RideSetPriceProjection(state, observedRide);
+            const auto expected = RideSetPriceRejectedResult(status, STR_ERR_INVALID_PARAMETER, message, "invalid_parameters");
+            const auto queried = QueryNativeAction("RideSetPriceAction", args, state);
+            ASSERT_TRUE(queried.ok) << queried.message;
+            EXPECT_EQ(queried.value, expected);
+            EXPECT_EQ(RideSetPriceProjection(state, observedRide), before);
+
+            const auto executed = ExecuteNativeAction("RideSetPriceAction", args, state);
+            ASSERT_TRUE(executed.ok) << executed.message;
+            EXPECT_EQ(executed.value, expected);
+            EXPECT_EQ(RideSetPriceProjection(state, observedRide), before);
+        }
+    };
+} // namespace
+
+TEST_F(NativeActionContractRideSetPrice, EnterprisePrimaryAndSecondaryAssignmentsMatchOrdinaryExecution)
+{
+    for (const bool primary : { true, false })
+    {
+        LoadEnterprisePark();
+        auto& ordinaryState = OpenRCT2::getGameState();
+        json_t ordinaryArgs;
+        RideId ordinaryRide{};
+        PrepareEnterpriseRide(ordinaryState, ordinaryRide, ordinaryArgs, primary, primary ? 150 : 175);
+        auto ordinaryAction = std::make_unique<GameActions::RideSetPriceAction>(
+            ordinaryRide, ordinaryArgs["price"].get<money64>(), primary);
+        ordinaryAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+        const auto ordinaryCashBefore = ordinaryState.park.cash;
+        const auto oldInUpdateCode = gInUpdateCode;
+        gInUpdateCode = true;
+        const auto ordinaryResult = GameActions::Execute(ordinaryAction.get(), ordinaryState);
+        gInUpdateCode = oldInUpdateCode;
+        ASSERT_EQ(ordinaryResult.error, GameActions::Status::ok);
+        EXPECT_EQ(ordinaryResult.expenditure, ExpenditureType::parkRideTickets);
+        EXPECT_EQ(ordinaryResult.cost, 0);
+        EXPECT_EQ(ordinaryResult.position.x, 432);
+        EXPECT_EQ(ordinaryResult.position.y, 432);
+        EXPECT_EQ(ordinaryResult.position.z, 112);
+        EXPECT_EQ(ordinaryState.park.cash, ordinaryCashBefore);
+        const auto ordinaryProjection = RideSetPriceProjection(ordinaryState, ordinaryRide);
+        EXPECT_EQ(ordinaryProjection["ride"]["prices"], (json_t{ primary ? 150 : 100, primary ? 200 : 175 }));
+
+        LoadEnterprisePark();
+        auto& publicState = OpenRCT2::getGameState();
+        json_t publicArgs;
+        RideId publicRide{};
+        PrepareEnterpriseRide(publicState, publicRide, publicArgs, primary, primary ? 150 : 175);
+        ASSERT_EQ(publicRide, ordinaryRide);
+        const auto publicCashBefore = publicState.park.cash;
+        const auto queried = QueryNativeAction("RideSetPriceAction", publicArgs, publicState);
+        ASSERT_TRUE(queried.ok) << queried.message;
+        EXPECT_EQ(
+            queried.value,
+            (json_t{ { "action", "RideSetPriceAction" },
+                     { "status", 0 },
+                     { "accepted", true },
+                     { "cost", 0 },
+                     { "position", { { "x", -32768 }, { "y", -32768 }, { "z", -32768 } } } }));
+        const auto executed = ExecuteNativeAction("RideSetPriceAction", publicArgs, publicState);
+        ASSERT_TRUE(executed.ok) << executed.message;
+        auto expected = RideSetPriceResultProjection(ordinaryResult);
+        expected["action"] = "RideSetPriceAction";
+        EXPECT_EQ(executed.value, expected);
+        EXPECT_EQ(publicState.park.cash, publicCashBefore);
+        EXPECT_EQ(RideSetPriceProjection(publicState, publicRide), ordinaryProjection);
+    }
+}
+
+TEST_F(NativeActionContractRideSetPrice, RejectsMissingRideWithoutMutation)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    json_t args;
+    RideId rideId{};
+    PrepareEnterpriseRide(state, rideId, args, true, 150);
+    args["ride"] = 65535;
+    ExpectRejected(state, rideId, args, GameActions::Status::invalidParameters, STR_ERR_RIDE_NOT_FOUND);
+}
+
+TEST_F(NativeActionContractRideSetPrice, RejectsMissingEntrySubtypeWithoutMutation)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    json_t args;
+    RideId rideId{};
+    PrepareEnterpriseRide(state, rideId, args, true, 150);
+    GetRide(rideId)->subtype = kObjectEntryIndexNull;
+    ExpectRejected(state, rideId, args, GameActions::Status::invalidParameters, STR_ERR_RIDE_OBJECT_ENTRY_NOT_FOUND);
+}
+
+TEST_F(NativeActionContractRideSetPrice, RejectsPriceBoundsWithoutMutation)
+{
+    for (const money64 invalidPrice : { kRideMinPrice - 1, kRideMaxPrice + 1 })
+    {
+        LoadEnterprisePark();
+        auto& state = OpenRCT2::getGameState();
+        json_t args;
+        RideId rideId{};
+        PrepareEnterpriseRide(state, rideId, args, true, invalidPrice);
+        ExpectRejected(state, rideId, args, GameActions::Status::invalidParameters, kStringIdEmpty);
+    }
+}
+
+TEST_F(NativeActionContractRideSetPrice, ExecuteRequeriesInvalidatedEntryAfterAcceptedQuery)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    json_t args;
+    RideId rideId{};
+    PrepareEnterpriseRide(state, rideId, args, true, 150);
+    const auto queried = QueryNativeAction("RideSetPriceAction", args, state);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+    const auto before = RideSetPriceProjection(state, rideId);
+    GetRide(rideId)->subtype = kObjectEntryIndexNull;
+    const auto expected = RideSetPriceRejectedResult(
+        GameActions::Status::invalidParameters, STR_ERR_INVALID_PARAMETER, STR_ERR_RIDE_OBJECT_ENTRY_NOT_FOUND,
+        "invalid_parameters");
+    const auto executed = ExecuteNativeAction("RideSetPriceAction", args, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    EXPECT_EQ(executed.value, expected);
+    EXPECT_EQ(RideSetPriceProjection(state, rideId), before);
+}
+
+TEST_F(NativeActionContractRideSetPrice, PublicSchemaDeclaresCompleteBooleanPrimaryPrice)
+{
+    const auto actions = NativeActions();
+    const auto descriptor = std::find_if(
+        actions.begin(), actions.end(), [](const auto& action) { return action.name == "RideSetPriceAction"; });
+    ASSERT_NE(descriptor, actions.end());
+    ASSERT_TRUE(descriptor->schema["properties"].is_object());
+    EXPECT_EQ(descriptor->schema["properties"].size(), 3u);
+    EXPECT_EQ(descriptor->schema["properties"]["isPrimaryPrice"], (json_t{ { "type", "boolean" } }));
+    ASSERT_TRUE(descriptor->schema["required"].is_array());
+    EXPECT_EQ(descriptor->schema["required"], (json_t{ "ride", "price", "isPrimaryPrice" }));
 }
