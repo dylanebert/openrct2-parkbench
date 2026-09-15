@@ -1594,6 +1594,21 @@ TEST_F(NativeActionContractTrackPlace, RejectsMissingRideAndRideTypeMismatchWith
     ExpectRejected(mismatchState, mismatchRide, mismatchArgs, mismatch, GameActions::Status::invalidParameters, kStringIdNone);
 }
 
+TEST_F(NativeActionContractTrackPlace, RejectsRideTypeCountWithArbitraryChangesWithoutMutation)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    state.cheats.allowArbitraryRideTypeChanges = true;
+    RideId rideId{};
+    json_t legalArgs;
+    PrepareLegalState(state, rideId, legalArgs);
+    auto invalidRideType = legalArgs;
+    invalidRideType["rideType"] = RIDE_TYPE_COUNT;
+    ExpectRejected(
+        state, rideId, legalArgs, invalidRideType, GameActions::Status::invalidParameters,
+        STR_ERR_VALUE_OUT_OF_RANGE);
+}
+
 TEST_F(NativeActionContractTrackPlace, RejectsOriginAndBrakeSpeedWithoutMutation)
 {
     LoadEnterprisePark();
