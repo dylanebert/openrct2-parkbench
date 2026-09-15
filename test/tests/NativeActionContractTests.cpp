@@ -1616,6 +1616,17 @@ TEST_F(NativeActionContractTrackPlace, RejectsOriginAndBrakeSpeedWithoutMutation
         heightState, heightRide, heightArgs, invalidHeight, GameActions::Status::invalidParameters, STR_INVALID_HEIGHT);
 
     LoadEnterprisePark();
+    auto& directionState = OpenRCT2::getGameState();
+    RideId directionRide{};
+    json_t directionArgs;
+    PrepareLegalState(directionState, directionRide, directionArgs);
+    auto invalidDirection = directionArgs;
+    invalidDirection["direction"] = 4;
+    ExpectRejected(
+        directionState, directionRide, directionArgs, invalidDirection, GameActions::Status::invalidParameters,
+        STR_ERR_VALUE_OUT_OF_RANGE);
+
+    LoadEnterprisePark();
     auto& speedState = OpenRCT2::getGameState();
     RideId speedRide{};
     json_t speedArgs;
