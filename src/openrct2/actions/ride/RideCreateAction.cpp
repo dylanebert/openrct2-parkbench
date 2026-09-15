@@ -16,7 +16,6 @@
 #include "../../localisation/StringIds.h"
 #include "../../object/ObjectLimits.h"
 #include "../../object/ObjectManager.h"
-#include "../../object/StationObject.h"
 #include "../../ride/Ride.h"
 #include "../../ride/RideData.h"
 #include "../../ride/ShopItem.h"
@@ -100,15 +99,7 @@ namespace OpenRCT2::GameActions
             return Result(Status::invalidParameters, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE);
         }
 
-        const auto& rideTypeDescriptor = GetRideTypeDescriptor(_rideType);
-        if (rideTypeDescriptor.flags.has(RtdFlag::hasEntranceAndExit) && _entranceObjectIndex != kObjectEntryIndexNull
-            && GetContext()->GetObjectManager().GetLoadedObject<StationObject>(_entranceObjectIndex) == nullptr)
-        {
-            LOG_ERROR("Entrance object not found for entranceObject %d", _entranceObjectIndex);
-            return Result(Status::invalidParameters, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_UNKNOWN_OBJECT_TYPE);
-        }
-
-        const auto& colourPresets = rideTypeDescriptor.ColourPresets;
+        const auto& colourPresets = GetRideTypeDescriptor(_rideType).ColourPresets;
         if (_trackColourPreset >= colourPresets.count)
         {
             LOG_ERROR("Can't create ride, invalid colour preset %d", _trackColourPreset);
@@ -136,15 +127,6 @@ namespace OpenRCT2::GameActions
 
     Result RideCreateAction::Execute(GameState_t& gameState, Park::ParkData& park) const
     {
-        // Execute can be reached directly by nested and test runners. Keep the owner
-        // predicate in front of allocation so malformed compatibility tuples cannot
-        // create a partially initialized ride.
-        const auto queryResult = Query(gameState, park);
-        if (queryResult.error != Status::ok)
-        {
-            return queryResult;
-        }
-
         auto res = Result();
 
         int32_t rideEntryIndex = RideGetEntryIndex(_rideType, _subType);

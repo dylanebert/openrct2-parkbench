@@ -24,6 +24,8 @@ set(test_files
    "${CMAKE_CURRENT_SOURCE_DIR}/NativeMonitorTests.cpp"
    "${CMAKE_CURRENT_SOURCE_DIR}/NativeApiTests.cpp"
    "${CMAKE_CURRENT_SOURCE_DIR}/NativeActionContractTests.cpp"
+   "${CMAKE_CURRENT_SOURCE_DIR}/NativeActionContractRideProjection.cpp"
+   "${CMAKE_CURRENT_SOURCE_DIR}/NativeActionContractRideProjection.h"
    "${CMAKE_CURRENT_SOURCE_DIR}/NetworkTests.cpp"
    "${CMAKE_CURRENT_SOURCE_DIR}/Pathfinding.cpp"
    "${CMAKE_CURRENT_SOURCE_DIR}/Platform.cpp"
