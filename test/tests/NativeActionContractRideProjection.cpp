@@ -1,18 +1,17 @@
 #include "NativeActionContractRideProjection.h"
 
+#include <algorithm>
+#include <limits>
 #include <openrct2/entity/EntityList.h>
 #include <openrct2/entity/Guest.h>
 #include <openrct2/management/NewsItem.h>
 #include <openrct2/peep/RideUseSystem.h>
 #include <openrct2/ride/Vehicle.h>
 #include <openrct2/world/Map.h>
-#include <openrct2/world/tile_element/TileElement.h>
-#include <openrct2/world/tile_element/TrackElement.h>
 #include <openrct2/world/tile_element/EntranceElement.h>
 #include <openrct2/world/tile_element/PathElement.h>
-
-#include <algorithm>
-#include <limits>
+#include <openrct2/world/tile_element/TileElement.h>
+#include <openrct2/world/tile_element/TrackElement.h>
 #include <optional>
 
 namespace OpenRCT2::Testing
@@ -73,13 +72,15 @@ namespace OpenRCT2::Testing
                 { "occupants", std::move(occupants) },
                 { "occupantCount", vehicle->num_peeps },
                 { "nextFreeSeat", vehicle->next_free_seat },
-                { "colours", {
+                { "colours",
+                  {
                       { "body", static_cast<uint8_t>(vehicle->colours.Body) },
                       { "trim", static_cast<uint8_t>(vehicle->colours.Trim) },
                       { "tertiary", static_cast<uint8_t>(vehicle->colours.Tertiary) },
                   } },
                 { "flags", vehicle->flags.holder },
-                { "trackLocation", {
+                { "trackLocation",
+                  {
                       { "x", vehicle->TrackLocation.x },
                       { "y", vehicle->TrackLocation.y },
                       { "z", vehicle->TrackLocation.z },
@@ -99,12 +100,13 @@ namespace OpenRCT2::Testing
             json_t thoughts = json_t::array();
             for (const auto& thought : guest->thoughts)
             {
-                thoughts.push_back({
-                    { "type", static_cast<uint8_t>(thought.type) },
-                    { "itemOrRide", thought.item },
-                    { "freshness", thought.freshness },
-                    { "freshTimeout", thought.fresh_timeout },
-                });
+                thoughts.push_back(
+                    {
+                        { "type", static_cast<uint8_t>(thought.type) },
+                        { "itemOrRide", thought.item },
+                        { "freshness", thought.freshness },
+                        { "freshTimeout", thought.fresh_timeout },
+                    });
             }
             return {
                 { "id", id },
@@ -123,9 +125,12 @@ namespace OpenRCT2::Testing
                 { "favouriteRide", guest->favouriteRide.ToUnderlying() },
                 { "previousRide", guest->previousRide.ToUnderlying() },
                 { "voucherRide", guest->voucherRideId.ToUnderlying() },
-                { "photoRides", {
-                      guest->photo1RideRef.ToUnderlying(), guest->photo2RideRef.ToUnderlying(),
-                      guest->photo3RideRef.ToUnderlying(), guest->photo4RideRef.ToUnderlying(),
+                { "photoRides",
+                  {
+                      guest->photo1RideRef.ToUnderlying(),
+                      guest->photo2RideRef.ToUnderlying(),
+                      guest->photo3RideRef.ToUnderlying(),
+                      guest->photo4RideRef.ToUnderlying(),
                   } },
                 { "itemFlags", guest->itemFlags },
                 { "peepFlags", guest->PeepFlags },
@@ -145,16 +150,17 @@ namespace OpenRCT2::Testing
                     const auto* raw = reinterpret_cast<const uint8_t*>(element);
                     for (size_t i = 0; i < kTileElementSize; ++i)
                         bytes.push_back(raw[i]);
-                    elements.push_back({
-                        { "type", static_cast<uint8_t>(element->getType()) },
-                        { "flags", element->flags },
-                        { "baseHeight", element->baseHeight },
-                        { "clearanceHeight", element->clearanceHeight },
-                        { "owner", element->owner },
-                        { "direction", static_cast<uint8_t>(element->getDirection()) },
-                        { "ride", element->GetRideIndex().ToUnderlying() },
-                        { "bytes", std::move(bytes) },
-                    });
+                    elements.push_back(
+                        {
+                            { "type", static_cast<uint8_t>(element->getType()) },
+                            { "flags", element->flags },
+                            { "baseHeight", element->baseHeight },
+                            { "clearanceHeight", element->clearanceHeight },
+                            { "owner", element->owner },
+                            { "direction", static_cast<uint8_t>(element->getDirection()) },
+                            { "ride", element->GetRideIndex().ToUnderlying() },
+                            { "bytes", std::move(bytes) },
+                        });
                     if (element->isLastForTile())
                         break;
                     ++element;
@@ -177,7 +183,8 @@ namespace OpenRCT2::Testing
                 { "price0", ride.price[0] },
                 { "price1", ride.price[1] },
                 { "value", ride.value },
-                { "ratings", {
+                { "ratings",
+                  {
                       { "excitement", static_cast<int32_t>(ride.ratings.excitement) },
                       { "intensity", static_cast<int32_t>(ride.ratings.intensity) },
                       { "nausea", static_cast<int32_t>(ride.ratings.nausea) },
@@ -203,14 +210,13 @@ namespace OpenRCT2::Testing
                 return false;
             while (true)
             {
-                if (const auto* track = element->asTrack(); track != nullptr
-                    && track->GetRideIndex().ToUnderlying() == rideValue)
+                if (const auto* track = element->asTrack();
+                    track != nullptr && track->GetRideIndex().ToUnderlying() == rideValue)
                     return true;
-                if (const auto* entrance = element->asEntrance(); entrance != nullptr
-                    && entrance->GetRideIndex().ToUnderlying() == rideValue)
+                if (const auto* entrance = element->asEntrance();
+                    entrance != nullptr && entrance->GetRideIndex().ToUnderlying() == rideValue)
                     return true;
-                if (const auto* path = element->asPath(); path != nullptr
-                    && path->GetRideIndex().ToUnderlying() == rideValue)
+                if (const auto* path = element->asPath(); path != nullptr && path->GetRideIndex().ToUnderlying() == rideValue)
                     return true;
                 if (element->isLastForTile())
                     break;
@@ -218,7 +224,7 @@ namespace OpenRCT2::Testing
             }
             return false;
         }
-    }
+    } // namespace
 
     RideProjectionWatchSet CaptureRideProjectionWatchSet(const GameState_t& state, const json_t& args)
     {
@@ -245,11 +251,12 @@ namespace OpenRCT2::Testing
             expanded = false;
             for (const auto rawId : std::vector<uint16_t>(watch.vehicleIds.begin(), watch.vehicleIds.end()))
             {
-                const auto* vehicle = const_cast<GameState_t&>(state).entities.GetEntity<Vehicle>(EntityId::FromUnderlying(rawId));
+                const auto* vehicle = const_cast<GameState_t&>(state).entities.GetEntity<Vehicle>(
+                    EntityId::FromUnderlying(rawId));
                 if (vehicle == nullptr)
                     continue;
-                for (const auto linked : { vehicle->next_vehicle_on_train, vehicle->prev_vehicle_on_ride,
-                                           vehicle->next_vehicle_on_ride })
+                for (const auto linked :
+                     { vehicle->next_vehicle_on_train, vehicle->prev_vehicle_on_ride, vehicle->next_vehicle_on_ride })
                 {
                     if (!linked.IsNull() && watch.vehicleIds.insert(linked.ToUnderlying()).second)
                         expanded = true;
@@ -285,10 +292,12 @@ namespace OpenRCT2::Testing
 
         json_t vehicles = json_t::array();
         for (const auto id : watch.vehicleIds)
-            vehicles.push_back(SerializeVehicle(const_cast<GameState_t&>(state).entities.GetEntity<Vehicle>(EntityId::FromUnderlying(id)), id));
+            vehicles.push_back(SerializeVehicle(
+                const_cast<GameState_t&>(state).entities.GetEntity<Vehicle>(EntityId::FromUnderlying(id)), id));
         json_t guests = json_t::array();
         for (const auto id : watch.guestIds)
-            guests.push_back(SerializeGuest(const_cast<GameState_t&>(state).entities.GetEntity<Guest>(EntityId::FromUnderlying(id)), id));
+            guests.push_back(
+                SerializeGuest(const_cast<GameState_t&>(state).entities.GetEntity<Guest>(EntityId::FromUnderlying(id)), id));
 
         json_t history = json_t::array();
         for (const auto id : watch.guestIds)
@@ -312,10 +321,14 @@ namespace OpenRCT2::Testing
         for (const auto& banner : state.banners)
         {
             if (!banner.isNull())
-                banners.push_back({
-                    { "id", banner.id.ToUnderlying() }, { "type", banner.type }, { "flags", banner.flags.holder },
-                    { "assoc", banner.rideIndex.ToUnderlying() }, { "text", banner.text },
-                });
+                banners.push_back(
+                    {
+                        { "id", banner.id.ToUnderlying() },
+                        { "type", banner.type },
+                        { "flags", banner.flags.holder },
+                        { "assoc", banner.rideIndex.ToUnderlying() },
+                        { "text", banner.text },
+                    });
         }
 
         json_t rides = json_t::array();
@@ -332,18 +345,20 @@ namespace OpenRCT2::Testing
             rideValue["price1"] = ride.price[1];
             rideValue["trackColours"] = json_t::array();
             for (const auto& colours : ride.trackColours)
-                rideValue["trackColours"].push_back({
-                    { "main", static_cast<uint8_t>(colours.main) },
-                    { "additional", static_cast<uint8_t>(colours.additional) },
-                    { "supports", static_cast<uint8_t>(colours.supports) },
-                });
+                rideValue["trackColours"].push_back(
+                    {
+                        { "main", static_cast<uint8_t>(colours.main) },
+                        { "additional", static_cast<uint8_t>(colours.additional) },
+                        { "supports", static_cast<uint8_t>(colours.supports) },
+                    });
             rideValue["vehicleColours"] = json_t::array();
             for (const auto& colours : ride.vehicleColours)
-                rideValue["vehicleColours"].push_back({
-                    { "body", static_cast<uint8_t>(colours.Body) },
-                    { "trim", static_cast<uint8_t>(colours.Trim) },
-                    { "tertiary", static_cast<uint8_t>(colours.Tertiary) },
-                });
+                rideValue["vehicleColours"].push_back(
+                    {
+                        { "body", static_cast<uint8_t>(colours.Body) },
+                        { "trim", static_cast<uint8_t>(colours.Trim) },
+                        { "tertiary", static_cast<uint8_t>(colours.Tertiary) },
+                    });
             rideValue["everBeenOpened"] = ride.flags.has(RideFlag::everBeenOpened);
             rideValue["lastCrashType"] = ride.lastCrashType;
             rideValue["reliability"] = ride.reliability;
@@ -355,10 +370,13 @@ namespace OpenRCT2::Testing
 
         json_t campaigns = json_t::array();
         for (const auto& campaign : state.park.marketingCampaigns)
-            campaigns.push_back({
-                { "type", campaign.type }, { "weeksLeft", campaign.weeksLeft }, { "flags", campaign.flags.holder },
-                { "ride", campaign.rideId.ToUnderlying() },
-            });
+            campaigns.push_back(
+                {
+                    { "type", campaign.type },
+                    { "weeksLeft", campaign.weeksLeft },
+                    { "flags", campaign.flags.holder },
+                    { "ride", campaign.rideId.ToUnderlying() },
+                });
 
         const auto& park = state.park;
         const json_t finance = {
@@ -371,8 +389,11 @@ namespace OpenRCT2::Testing
             { "companyValue", park.companyValue },
         };
         return {
-            { "watch", {
-                  { "rides", watch.rideIds }, { "vehicles", watch.vehicleIds }, { "guests", watch.guestIds },
+            { "watch",
+              {
+                  { "rides", watch.rideIds },
+                  { "vehicles", watch.vehicleIds },
+                  { "guests", watch.guestIds },
                   { "tiles", watch.tileCoords.size() },
               } },
             { "rides", std::move(rides) },
@@ -395,4 +416,4 @@ namespace OpenRCT2::Testing
             return SerializeRideProjection(state, args, *gActiveWatchSet);
         return SerializeRideProjection(state, args, CaptureRideProjectionWatchSet(state, args));
     }
-}
+} // namespace OpenRCT2::Testing

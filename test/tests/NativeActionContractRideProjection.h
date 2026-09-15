@@ -1,13 +1,11 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
-
 #include <cstdint>
-#include <set>
-#include <vector>
-
+#include <nlohmann/json.hpp>
 #include <openrct2/GameState.h>
 #include <openrct2/world/Location.hpp>
+#include <set>
+#include <vector>
 
 namespace OpenRCT2::Testing
 {
@@ -30,4 +28,4 @@ namespace OpenRCT2::Testing
     void ClearRideProjectionWatchSet();
     json_t SerializeRideProjection(const GameState_t& state, const json_t& args, const RideProjectionWatchSet& watch);
     json_t SerializeRideProjection(const GameState_t& state, const json_t& args);
-}
+} // namespace OpenRCT2::Testing
