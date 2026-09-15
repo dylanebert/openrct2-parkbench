@@ -43,10 +43,13 @@
 #include <openrct2/entity/EntityList.h>
 #include <openrct2/entity/Guest.h>
 #include <openrct2/management/Marketing.h>
+#include <openrct2/management/NewsItem.h>
 #include <openrct2/object/ObjectManager.h>
 #include <openrct2/peep/RideUseSystem.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
+#include <openrct2/ride/Vehicle.h>
+#include <openrct2/world/Banner.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
 #include <set>
@@ -77,21 +80,35 @@ namespace
         bool expectAccepted;
         std::function<void(GameState_t&, const json_t&)> prepareState;
         std::set<std::string> changedKeys;
-        std::string ownerPredicate;
+        std::string acceptedCaseName = "legal";
+        // This is executable test-only owner evidence. A label alone is not
+        // an owner contract and is deliberately not accepted by the runner.
+        std::function<bool(const json_t&)> ownerResult;
 
         SemanticInvalidPartition(
             std::string parameter_, std::function<void(json_t&)> makeInvalid_, std::string caseName_ = {},
             bool expectAccepted_ = false, std::function<void(GameState_t&, const json_t&)> prepareState_ = {},
-            std::set<std::string> changedKeys_ = {}, std::string ownerPredicate_ = {})
+            std::set<std::string> changedKeys_ = {}, std::string acceptedCaseName_ = "legal",
+            std::function<bool(const json_t&)> ownerResult_ = {})
             : parameter(std::move(parameter_))
             , makeInvalid(std::move(makeInvalid_))
             , caseName(std::move(caseName_))
             , expectAccepted(expectAccepted_)
             , prepareState(std::move(prepareState_))
             , changedKeys(changedKeys_.empty() ? std::set<std::string>{ parameter } : std::move(changedKeys_))
-            , ownerPredicate(ownerPredicate_.empty() ? caseName : std::move(ownerPredicate_))
+            , acceptedCaseName(std::move(acceptedCaseName_))
+            , ownerResult(std::move(ownerResult_))
         {
         }
+    };
+
+    struct NamedFieldDelta
+    {
+        std::string jsonPath;
+        // The callback must assert the exact pre/post value at jsonPath. It is
+        // allowed to encode a typed transform, but it may not fall back to a
+        // whole-projection inequality.
+        std::function<bool(const json_t& before, const json_t& after, const json_t& args)> expectedTransform;
     };
 
     struct AcceptedFixtureCase
@@ -99,15 +116,16 @@ namespace
         std::string name;
         std::function<json_t()> args;
         std::function<void(GameState_t&, const json_t&)> prepareState;
-        std::vector<std::string> intendedFields;
+        std::vector<NamedFieldDelta> namedDeltas;
 
         AcceptedFixtureCase(
             std::string name_, std::function<json_t()> args_,
-            std::function<void(GameState_t&, const json_t&)> prepareState_ = {}, std::vector<std::string> intendedFields_ = {})
+            std::function<void(GameState_t&, const json_t&)> prepareState_ = {},
+            std::vector<NamedFieldDelta> namedDeltas_ = {})
             : name(std::move(name_))
             , args(std::move(args_))
             , prepareState(std::move(prepareState_))
-            , intendedFields(std::move(intendedFields_))
+            , namedDeltas(std::move(namedDeltas_))
         {
         }
     };
@@ -142,6 +160,7 @@ namespace
         std::vector<AcceptedFixtureCase> acceptedCases;
         std::function<json_t(const GameState_t&, const json_t&)> rejectionProjection;
         std::function<json_t(const GameState_t&, const json_t&)> acceptedPostStateProjection;
+        std::function<bool(const json_t&, std::string*)> projectionContract;
         std::function<GameActions::GameAction::Ptr(const json_t&)> makeOrdinaryAction;
         ExpectedCostClass expectedCostClass = ExpectedCostClass::engineComputed;
         std::vector<std::string> transportOmissions;
@@ -307,15 +326,14 @@ namespace
         return changed == declared ? std::string{} : "semantic partition changed keys do not match declaration";
     }
 
-    std::string ValidateOwnerPredicate(const json_t& response, std::string_view predicate)
+    std::string ValidateOwnerPredicate(const json_t& response, const std::function<bool(const json_t&)>& predicate)
     {
-        if (predicate.empty())
-            return "owner predicate identifier is empty";
+        if (!predicate)
+            return "semantic partition has no executable owner result predicate";
         if (!response.contains("rejection") || !response["rejection"].is_object())
             return "owner result has no structured rejection";
-        const auto& rejection = response["rejection"];
-        if (!rejection.contains("code") || !rejection.contains("title") || !rejection.contains("message"))
-            return "owner result does not preserve code/title/message for " + std::string(predicate);
+        if (!predicate(response))
+            return "owner result did not satisfy its executable owner predicate";
         return {};
     }
 
@@ -335,14 +353,26 @@ namespace
         return {};
     }
 
-    std::string ValidateNamedDelta(const json_t& before, const json_t& after, const std::vector<std::string>& intendedFields)
+    std::string ValidateNamedDelta(
+        const json_t& before, const json_t& after, const json_t& args, const std::vector<NamedFieldDelta>& deltas)
     {
-        if (intendedFields.empty())
-            return "accepted case declares no intended field delta";
-        for (const auto& field : intendedFields)
+        if (deltas.empty())
+            return "accepted case declares no exact JSON field delta";
+        for (const auto& delta : deltas)
         {
-            if (!before.contains(field) || !after.contains(field) || before.at(field) == after.at(field))
-                return "accepted case did not change intended field: " + field;
+            if (delta.jsonPath.empty() || !delta.expectedTransform)
+                return "accepted case declares an incomplete JSON field delta";
+            try
+            {
+                const auto& beforeValue = before.at(json_t::json_pointer(delta.jsonPath));
+                const auto& afterValue = after.at(json_t::json_pointer(delta.jsonPath));
+                if (!delta.expectedTransform(beforeValue, afterValue, args))
+                    return "accepted case did not satisfy intended field delta: " + delta.jsonPath;
+            }
+            catch (const std::exception&)
+            {
+                return "accepted case is missing intended JSON path: " + delta.jsonPath;
+            }
         }
         return {};
     }
@@ -468,6 +498,84 @@ namespace
         if (const auto* entry = GetRideEntryByIndex(ride->subtype); entry != nullptr)
             fixture->vehiclePresetCount = entry->vehicle_preset_list->count;
         FindFixtureTrack(fixture->track, fixture->trackType);
+    }
+
+    void PopulateRideProjectionFixture(GameState_t& state, RideId rideId)
+    {
+        // These are deliberate values, not presence aliases. They make every
+        // store in the action projection observable and keep the watch
+        // identities meaningful if demolition/clearing is added later.
+        state.newsItems[0] = {
+            News::ItemType::ride, 0, rideId.ToUnderlying(), 7, 12, 3, "S2 recent target news",
+        };
+        state.newsItems[News::ItemHistoryStart] = {
+            News::ItemType::ride, 1, rideId.ToUnderlying(), 9, 11, 2, "S2 archived target news",
+        };
+        MarketingCampaign campaign{};
+        campaign.type = 0;
+        campaign.weeksLeft = 3;
+        campaign.rideId = rideId;
+        state.park.marketingCampaigns.push_back(campaign);
+        state.park.value = 12345;
+        state.park.valueHistory[0] = 12000;
+
+        if (auto* banner = CreateBanner(); banner != nullptr)
+        {
+            banner->type = 0;
+            banner->rideIndex = rideId;
+            banner->text = "S2 target banner";
+            banner->colour = Drawing::Colour::brightRed;
+            banner->textColour = Drawing::TextColour::white;
+            banner->position = { 1, 1 };
+        }
+
+        Guest* guest = nullptr;
+        for (const auto id : state.entities.GetEntityList(EntityType::guest))
+        {
+            guest = state.entities.GetEntity<Guest>(id);
+            if (guest != nullptr)
+                break;
+        }
+        if (guest == nullptr)
+            guest = state.entities.CreateEntity<Guest>();
+        if (guest != nullptr)
+        {
+            guest->CurrentRide = rideId;
+            guest->CurrentRideStation = StationIndex::FromUnderlying(0);
+            guest->CurrentTrain = 0;
+            guest->CurrentCar = 0;
+            guest->CurrentSeat = 0;
+            guest->rejoinQueueTimeout = 4;
+            guest->previousRide = rideId;
+            guest->previousRideTimeOut = 8;
+            guest->voucherRideId = rideId;
+            guest->photo1RideRef = rideId;
+            guest->favouriteRide = rideId;
+            guest->guestNextInQueue = EntityId::GetNull();
+            guest->thoughts[0].type = PeepThoughtType::wasGreat;
+            guest->thoughts[0].rideId = rideId;
+            guest->thoughts[0].freshness = 1;
+            guest->thoughts[0].fresh_timeout = 2;
+            RideUse::GetHistory().Add(guest->id, rideId);
+
+            auto* vehicle = state.entities.CreateEntity<Vehicle>();
+            if (vehicle != nullptr)
+            {
+                vehicle->ride = rideId;
+                vehicle->num_seats = 2;
+                vehicle->num_peeps = 1;
+                vehicle->next_free_seat = 1;
+                vehicle->peep[0] = guest->id;
+                if (auto* ride = GetRide(rideId); ride != nullptr)
+                {
+                    ride->vehicles[0] = vehicle->id;
+                    ride->numTrains = std::max<uint8_t>(ride->numTrains, 1);
+                }
+                guest->CurrentTrain = 0;
+                guest->CurrentCar = 0;
+                guest->CurrentSeat = 0;
+            }
+        }
     }
 
     json_t RideListProjection(const GameState_t& state)
@@ -606,16 +714,6 @@ namespace
         };
         const auto it = census.find(registration);
         return it == census.end() ? std::set<std::string>{} : it->second;
-    }
-
-    std::vector<std::string> DefaultIntendedFields(std::string_view registration)
-    {
-        if (registration == "RideSetColourSchemeAction" || registration == "RideSetVisibilityAction"
-            || registration == "RideEntranceExitPlaceAction")
-            return { "tiles" };
-        if (registration == "RideDemolishAction")
-            return { "finance" };
-        return { "rides" };
     }
 
     class NativeActionContractHarness : public testing::Test
@@ -1559,7 +1657,23 @@ namespace
             }
 
             for (auto& fixture : fixtures)
+            {
+                if (fixture.acceptedCases.empty())
+                    fixture.acceptedCases.push_back({ "legal", fixture.legalArgs, {} });
+                for (auto& partition : fixture.semanticInvalidPartitions)
+                {
+                    partition.acceptedCaseName = "legal";
+                    if (!partition.ownerResult)
+                    {
+                        partition.ownerResult = [](const json_t& response) {
+                            const auto& rejection = response.at("rejection");
+                            return rejection.contains("code") && rejection.contains("title")
+                                && rejection.contains("message") && rejection.contains("detail");
+                        };
+                    }
+                }
                 fixture.requiredStalePredicates = RequiredStalePredicates(fixture.registration);
+            }
             return fixtures;
         }
 
@@ -1599,6 +1713,7 @@ namespace
                         GameActions::CommandFlag::noSpend,
                     });
                 ExecuteSetupAction(remove, state);
+                PopulateRideProjectionFixture(state, ride->id);
             };
             fixture.legalArgs = [legalArgs] { return *legalArgs; };
             fixture.semanticInvalidPartitions = {
@@ -1628,10 +1743,9 @@ namespace
             };
             fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) {
                 const auto rideValue = args.value("ride", -1);
-                json_t projection = {
-                    { "cash", state.park.cash },
-                    { "tileElements", TileElementCount({ args.value("x", 0), args.value("y", 0) }) },
-                };
+                json_t projection = OpenRCT2::Testing::SerializeRideProjection(state, args);
+                projection["cash"] = state.park.cash;
+                projection["tileElements"] = TileElementCount({ args.value("x", 0), args.value("y", 0) });
                 const auto stationValue = args.value("station", 0);
                 if (rideValue >= 0 && static_cast<size_t>(rideValue) < state.rides.size() && stationValue >= 0
                     && stationValue < Limits::kMaxStationsPerRide)
@@ -1651,9 +1765,8 @@ namespace
             };
             fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) {
                 const auto rideValue = args.value("ride", -1);
-                json_t projection = {
-                    { "tileElements", TileElementCount({ args.value("x", 0), args.value("y", 0) }) },
-                };
+                json_t projection = OpenRCT2::Testing::SerializeRideProjection(state, args);
+                projection["tileElements"] = TileElementCount({ args.value("x", 0), args.value("y", 0) });
                 const auto stationValue = args.value("station", 0);
                 if (rideValue >= 0 && static_cast<size_t>(rideValue) < state.rides.size() && stationValue >= 0
                     && stationValue < Limits::kMaxStationsPerRide)
@@ -1676,6 +1789,28 @@ namespace
                     static_cast<Direction>(args.at("direction").get<uint32_t>()),
                     RideId::FromUnderlying(args.at("ride").get<uint32_t>()),
                     StationIndex::FromUnderlying(args.at("station").get<uint32_t>()), args.at("isExit").get<bool>());
+            };
+            fixture.acceptedCases = {
+                { "place-entrance",
+                  fixture.legalArgs,
+                  {},
+                  { { "/tileElements",
+                      [](const json_t& before, const json_t& after, const json_t&) {
+                          return before.is_number_integer() && after.is_number_integer()
+                              && after.get<int64_t>() > before.get<int64_t>();
+                      } } } },
+            };
+            for (auto& partition : fixture.semanticInvalidPartitions)
+            {
+                partition.acceptedCaseName = "place-entrance";
+                partition.ownerResult = [](const json_t& response) {
+                    const auto& rejection = response.at("rejection");
+                    return rejection.contains("code") && rejection.contains("title") && rejection.contains("message")
+                        && rejection.contains("detail");
+                };
+            }
+            fixture.projectionContract = [](const json_t& projection, std::string* failure) {
+                return OpenRCT2::Testing::ValidateRideProjectionStores(projection, failure);
             };
             fixture.requiredStalePredicates = RequiredStalePredicates(fixture.registration);
             return fixture;
@@ -1754,31 +1889,46 @@ namespace
                 return false;
             }
 
-            // Every semantic invalid partition is run from a fresh legal state and
-            // its projection is sampled on both sides of public execution.
+            // Every invalid partition names and first proves an accepted
+            // branch. Invalid arguments are derived only from that branch.
+            std::vector<AcceptedFixtureCase> acceptedCases = fixture.acceptedCases;
+            if (acceptedCases.empty())
+                acceptedCases.push_back({ "legal", fixture.legalArgs, {} });
             for (const auto& partition : fixture.semanticInvalidPartitions)
             {
+                const auto acceptedIt = std::find_if(
+                    acceptedCases.begin(), acceptedCases.end(), [&](const auto& accepted) {
+                        return accepted.name == partition.acceptedCaseName;
+                    });
+                if (acceptedIt == acceptedCases.end())
+                {
+                    failure = "semantic partition does not reference a named accepted fixture case: " + partition.caseName;
+                    return false;
+                }
                 LoadPark("small_park_with_ferris_wheel.sv6");
                 auto& state = OpenRCT2::getGameState();
                 fixture.prepareLegalState(state);
-                auto args = fixture.legalArgs();
-                if (args.empty())
+                const auto acceptedArgs = acceptedIt->args();
+                if (acceptedIt->prepareState)
+                    acceptedIt->prepareState(state, acceptedArgs);
+                if (acceptedArgs.empty())
                 {
-                    failure = "legal starting args are empty";
+                    failure = "accepted fixture case has empty args: " + acceptedIt->name;
                     return false;
                 }
-                const auto acceptedArgs = args;
+                const auto acceptedQuery = QueryNativeAction(fixture.registration, acceptedArgs, state);
+                if (!acceptedQuery.ok || !acceptedQuery.value.value("accepted", false))
+                {
+                    failure = "named accepted fixture case did not prove before invalid mutation: " + acceptedIt->name;
+                    return false;
+                }
+                const auto acceptedWatch = OpenRCT2::Testing::CaptureRideProjectionWatchSet(state, acceptedArgs);
+                auto args = acceptedArgs;
                 partition.makeInvalid(args);
                 if (const auto changedKeyFailure = ValidateChangedKeys(acceptedArgs, args, partition.changedKeys);
                     !changedKeyFailure.empty())
                 {
                     failure = changedKeyFailure + ": " + partition.caseName;
-                    return false;
-                }
-                const auto ownerPredicate = partition.ownerPredicate.empty() ? partition.parameter : partition.ownerPredicate;
-                if (ownerPredicate.empty())
-                {
-                    failure = "semantic partition has no owner predicate identifier: " + partition.caseName;
                     return false;
                 }
                 if (partition.prepareState)
@@ -1804,17 +1954,26 @@ namespace
                     failure = "semantic invalid partition was accepted: " + partition.caseName;
                     return false;
                 }
-                if (const auto ownerFailure = ValidateOwnerPredicate(queried.value, ownerPredicate); !ownerFailure.empty())
+                if (const auto ownerFailure = ValidateOwnerPredicate(queried.value, partition.ownerResult); !ownerFailure.empty())
                 {
-                    failure = ownerFailure;
+                    failure = ownerFailure + ": " + partition.caseName;
                     return false;
                 }
-                OpenRCT2::Testing::SetRideProjectionWatchSet(OpenRCT2::Testing::CaptureRideProjectionWatchSet(state, args));
+                OpenRCT2::Testing::SetRideProjectionWatchSet(acceptedWatch);
                 const auto before = fixture.rejectionProjection(state, args);
                 if (before.empty())
                 {
                     failure = "rejection projection is empty for partition: " + partition.parameter;
                     return false;
+                }
+                if (fixture.projectionContract)
+                {
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(before, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected pre-state" : projectionFailure;
+                        return false;
+                    }
                 }
                 const auto executed = ExecuteNativeAction(fixture.registration, args, state);
                 if (!executed.ok || executed.value.value("accepted", true))
@@ -1822,10 +1981,20 @@ namespace
                     failure = "execution accepted semantic invalid partition: " + partition.parameter;
                     return false;
                 }
-                if (before != fixture.rejectionProjection(state, args))
+                const auto after = fixture.rejectionProjection(state, args);
+                if (before != after)
                 {
                     failure = "rejected execution mutated the declared projection: " + partition.parameter;
                     return false;
+                }
+                if (fixture.projectionContract)
+                {
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(after, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected post-state" : projectionFailure;
+                        return false;
+                    }
                 }
             }
 
@@ -1867,16 +2036,35 @@ namespace
                     OpenRCT2::Testing::CaptureRideProjectionWatchSet(staleState, staleArgs));
                 staleCase.mutate(staleState, staleArgs);
                 const auto staleBefore = fixture.rejectionProjection(staleState, staleArgs);
+                if (fixture.projectionContract)
+                {
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(staleBefore, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected stale pre-state" : projectionFailure;
+                        return false;
+                    }
+                }
                 const auto staleExecution = ExecuteNativeAction(fixture.registration, staleArgs, staleState);
                 if (!staleExecution.ok || staleExecution.value.value("accepted", true))
                 {
                     failure = "execution did not perform a fresh query after stale-state mutation: " + staleCase.name;
                     return false;
                 }
-                if (staleBefore.empty() || staleBefore != fixture.rejectionProjection(staleState, staleArgs))
+                const auto staleAfter = fixture.rejectionProjection(staleState, staleArgs);
+                if (staleBefore.empty() || staleBefore != staleAfter)
                 {
                     failure = "stale-query rejection mutated the declared projection: " + staleCase.name;
                     return false;
+                }
+                if (fixture.projectionContract)
+                {
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(staleAfter, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected stale post-state" : projectionFailure;
+                        return false;
+                    }
                 }
             }
             if (executedStalePredicates != fixture.requiredStalePredicates)
@@ -1888,9 +2076,6 @@ namespace
             // Independent fresh states are used for every accepted discriminated
             // case, not just the first enum value. Only the paused transport
             // omissions are excluded from parity.
-            std::vector<AcceptedFixtureCase> acceptedCases = fixture.acceptedCases;
-            if (acceptedCases.empty())
-                acceptedCases.push_back({ "default", fixture.legalArgs, {} });
             for (const auto& acceptedCase : acceptedCases)
             {
                 LoadPark("small_park_with_ferris_wheel.sv6");
@@ -1912,6 +2097,15 @@ namespace
                     failure = "accepted pre-state projection is empty: " + acceptedCase.name;
                     return false;
                 }
+                if (fixture.projectionContract)
+                {
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(ordinaryPre, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected accepted pre-state" : projectionFailure;
+                        return false;
+                    }
+                }
                 const auto ordinaryBefore = ordinaryState.park.cash;
                 auto ordinaryAction = fixture.makeOrdinaryAction(ordinaryArgs);
                 ordinaryAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
@@ -1926,23 +2120,19 @@ namespace
                 }
                 const auto ordinaryCashDelta = ordinaryState.park.cash - ordinaryBefore;
                 const auto ordinaryPost = fixture.acceptedPostStateProjection(ordinaryState, ordinaryArgs);
-                const auto intendedFields = acceptedCase.intendedFields.empty() ? DefaultIntendedFields(fixture.registration)
-                                                                                : acceptedCase.intendedFields;
-                if (const auto deltaFailure = ValidateNamedDelta(ordinaryPre, ordinaryPost, intendedFields);
-                    !deltaFailure.empty())
+                if (fixture.projectionContract)
                 {
-                    // A projection may use a nested action-specific record. The
-                    // full pre/post inequality remains mandatory; named fields
-                    // are asserted whenever the declaration names top-level paths.
-                    if (ordinaryPost == ordinaryPre)
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(ordinaryPost, &projectionFailure))
                     {
-                        failure = deltaFailure + ": " + acceptedCase.name;
+                        failure = projectionFailure.empty() ? "action projection contract rejected accepted post-state" : projectionFailure;
                         return false;
                     }
                 }
-                if (ordinaryPost == ordinaryPre)
+                if (const auto deltaFailure = ValidateNamedDelta(ordinaryPre, ordinaryPost, ordinaryArgs, acceptedCase.namedDeltas);
+                    !deltaFailure.empty())
                 {
-                    failure = "accepted case is an authoritative no-op: " + acceptedCase.name;
+                    failure = deltaFailure + ": " + acceptedCase.name;
                     return false;
                 }
                 if (ordinaryPost.empty())
@@ -1960,6 +2150,15 @@ namespace
                 OpenRCT2::Testing::SetRideProjectionWatchSet(
                     OpenRCT2::Testing::CaptureRideProjectionWatchSet(publicState, publicArgs));
                 const auto publicPre = fixture.acceptedPostStateProjection(publicState, publicArgs);
+                if (fixture.projectionContract)
+                {
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(publicPre, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected public pre-state" : projectionFailure;
+                        return false;
+                    }
+                }
                 const auto publicBefore = publicState.park.cash;
                 const auto publicQuery = QueryNativeAction(fixture.registration, publicArgs, publicState);
                 if (!publicQuery.ok || !publicQuery.value.value("accepted", false))
@@ -1991,9 +2190,19 @@ namespace
                     return false;
                 }
                 const auto publicPost = fixture.acceptedPostStateProjection(publicState, publicArgs);
-                if (publicPost == publicPre)
+                if (fixture.projectionContract)
                 {
-                    failure = "public accepted case is an authoritative no-op: " + acceptedCase.name;
+                    std::string projectionFailure;
+                    if (!fixture.projectionContract(publicPost, &projectionFailure))
+                    {
+                        failure = projectionFailure.empty() ? "action projection contract rejected public post-state" : projectionFailure;
+                        return false;
+                    }
+                }
+                if (const auto deltaFailure = ValidateNamedDelta(publicPre, publicPost, publicArgs, acceptedCase.namedDeltas);
+                    !deltaFailure.empty())
+                {
+                    failure = deltaFailure + ": public " + acceptedCase.name;
                     return false;
                 }
                 if (ordinaryPost != publicPost)
@@ -2095,6 +2304,29 @@ TEST(NativeActionContractInventory, RejectsZeroExpectedFamilyPopulation)
 class NativeActionContractRide : public NativeActionContractHarness
 {
 };
+
+TEST_F(NativeActionContractRide, RideSetVehicleDirectExecuteRejectsMissingEntryBeforeMutation)
+{
+    for (const bool cheat : { false, true })
+    {
+        LoadPark("small_park_with_ferris_wheel.sv6");
+        auto& state = OpenRCT2::getGameState();
+        auto* ride = FindFixtureRide();
+        ASSERT_NE(ride, nullptr);
+        ride->status = RideStatus::closed;
+        PopulateRideProjectionFixture(state, ride->id);
+        ride->subtype = kObjectEntryIndexNull;
+        state.cheats.disableTrainLengthLimit = cheat;
+        const json_t args{ { "ride", ride->id.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "colour", 0 } };
+        const auto watch = OpenRCT2::Testing::CaptureRideProjectionWatchSet(state, args);
+        OpenRCT2::Testing::SetRideProjectionWatchSet(watch);
+        const auto before = OpenRCT2::Testing::SerializeRideProjection(state, args);
+        GameActions::RideSetVehicleAction action(ride->id, GameActions::RideSetVehicleType::numTrains, 1, 0);
+        const auto result = action.Execute(state, state.park);
+        EXPECT_NE(result.error, GameActions::Status::ok) << "cheat=" << cheat;
+        EXPECT_EQ(before, OpenRCT2::Testing::SerializeRideProjection(state, args)) << "cheat=" << cheat;
+    }
+}
 
 TEST_F(NativeActionContractRide, CreatePreservesExplicitSubtypeSelectionUntilOwnerStage)
 {
@@ -2241,11 +2473,64 @@ TEST(NativeActionContractHarnessMutations, DescriptorCensusRed)
     EXPECT_NE(failure.find("descriptor"), std::string::npos);
 }
 
+TEST_F(NativeActionContractHarness, CoupledPartitionMutationReachesRunFixture)
+{
+    auto fixture = MakeEntranceFixture();
+    fixture.semanticInvalidPartitions.back().changedKeys = { "isExit" };
+    std::string failure;
+    EXPECT_FALSE(RunFixture(fixture, failure));
+    EXPECT_NE(failure.find("changed keys"), std::string::npos);
+}
+
+TEST_F(NativeActionContractHarness, WrongOwnerPredicateMutationReachesRunFixture)
+{
+    auto fixture = MakeEntranceFixture();
+    for (auto& partition : fixture.semanticInvalidPartitions)
+        partition.ownerResult = [](const json_t&) { return false; };
+    std::string failure;
+    EXPECT_FALSE(RunFixture(fixture, failure));
+    EXPECT_NE(failure.find("owner result"), std::string::npos);
+}
+
+TEST_F(NativeActionContractHarness, AcceptedNoOpMutationReachesRunFixture)
+{
+    auto fixture = MakeEntranceFixture();
+    fixture.acceptedCases.front().namedDeltas.front().expectedTransform =
+        [](const json_t&, const json_t&, const json_t&) { return false; };
+    std::string failure;
+    EXPECT_FALSE(RunFixture(fixture, failure));
+    EXPECT_NE(failure.find("intended field delta"), std::string::npos);
+}
+
+TEST_F(NativeActionContractHarness, OmittedAndFakeProjectionMutationsReachRunFixture)
+{
+    for (const bool fake : { false, true })
+    {
+        auto fixture = MakeEntranceFixture();
+        const auto original = fixture.rejectionProjection;
+        fixture.rejectionProjection = [original, fake](const GameState_t& state, const json_t& args) {
+            auto projection = original(state, args);
+            if (fake)
+                projection["activePeepLinks"] = json_t::array({ 1 });
+            else
+                projection.erase("campaigns");
+            return projection;
+        };
+        std::string failure;
+        EXPECT_FALSE(RunFixture(fixture, failure)) << "fake=" << fake;
+        EXPECT_TRUE(failure.find("projection store") != std::string::npos || failure.find("fake") != std::string::npos)
+            << failure;
+    }
+}
+
 TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
 {
     LoadPark("small_park_with_ferris_wheel.sv6");
     auto& state = OpenRCT2::getGameState();
-    const auto projection = OpenRCT2::Testing::SerializeRideProjection(state, { { "ride", 0 } });
+    auto* ride = FindFixtureRide();
+    ASSERT_NE(ride, nullptr);
+    PopulateRideProjectionFixture(state, ride->id);
+    const auto projection = OpenRCT2::Testing::SerializeRideProjection(state, { { "ride", ride->id.ToUnderlying() } });
     EXPECT_TRUE(projection.contains("news"));
     EXPECT_TRUE(projection["news"].contains("recent"));
     EXPECT_TRUE(projection["news"].contains("archived"));
@@ -2255,6 +2540,17 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     EXPECT_TRUE(projection.contains("campaigns"));
     EXPECT_TRUE(projection.contains("finance"));
     EXPECT_TRUE(projection.contains("parkValue"));
+    EXPECT_EQ(projection["parkValue"], 12345);
+    ASSERT_FALSE(projection["news"]["recent"].empty());
+    EXPECT_EQ(projection["news"]["recent"][0]["item"]["text"], "S2 recent target news");
+    ASSERT_FALSE(projection["news"]["archived"].empty());
+    EXPECT_EQ(projection["news"]["archived"][0]["item"]["text"], "S2 archived target news");
+    ASSERT_FALSE(projection["campaigns"].empty());
+    EXPECT_EQ(projection["campaigns"][0]["ride"], ride->id.ToUnderlying());
+    ASSERT_FALSE(projection["banners"].empty());
+    EXPECT_EQ(projection["banners"][0]["text"], "S2 target banner");
+    EXPECT_TRUE(projection["watch"].contains("tiles"));
+    EXPECT_TRUE(projection["watch"].contains("recentNewsSlots"));
 }
 
 TEST(NativeActionContractHarnessMutations, CoupledArgumentKeysRed)
@@ -2319,8 +2615,41 @@ TEST(NativeActionContractHarnessMutations, FakeProjectionStoreRed)
 
 TEST(NativeActionContractHarnessMutations, AcceptedNoOpRed)
 {
-    const auto failure = ValidateNamedDelta({ { "ride", 1 } }, { { "ride", 1 } }, { "ride" });
-    EXPECT_NE(failure.find("did not change"), std::string::npos);
+    const std::vector<NamedFieldDelta> deltas{
+        { "/ride", [](const json_t& before, const json_t& after, const json_t&) { return before != after; } },
+    };
+    const auto failure = ValidateNamedDelta({ { "ride", 1 } }, { { "ride", 1 } }, json_t::object(), deltas);
+    EXPECT_NE(failure.find("intended field delta"), std::string::npos);
+}
+
+TEST_F(NativeActionContractHarness, FormerVehicleRemainsInPersistentWatchAfterRemoval)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& state = OpenRCT2::getGameState();
+    auto* ride = FindFixtureRide();
+    ASSERT_NE(ride, nullptr);
+    auto* fixtureVehicle = state.entities.CreateEntity<Vehicle>();
+    ASSERT_NE(fixtureVehicle, nullptr) << "serializer fixture could not create a vehicle identity";
+    fixtureVehicle->ride = ride->id;
+    fixtureVehicle->num_seats = 2;
+    fixtureVehicle->num_peeps = 0;
+    const auto formerId = fixtureVehicle->id;
+    const json_t args{ { "ride", ride->id.ToUnderlying() } };
+    const auto watch = OpenRCT2::Testing::CaptureRideProjectionWatchSet(state, args);
+    ASSERT_TRUE(watch.vehicleIds.contains(formerId.ToUnderlying()));
+    OpenRCT2::Testing::SetRideProjectionWatchSet(watch);
+    state.entities.EntityRemove(state.entities.GetEntity<Vehicle>(formerId));
+    const auto projection = OpenRCT2::Testing::SerializeRideProjection(state, args);
+    bool foundFormer = false;
+    for (const auto& vehicle : projection["vehicles"])
+    {
+        if (vehicle.value("id", std::numeric_limits<uint16_t>::max()) == formerId.ToUnderlying())
+        {
+            foundFormer = true;
+            EXPECT_FALSE(vehicle.value("exists", true));
+        }
+    }
+    EXPECT_TRUE(foundFormer) << "former vehicle disappeared from persistent watch serialization";
 }
 
 TEST(NativeActionContractHarnessMutations, FormerVehicleWatchEntryRed)
