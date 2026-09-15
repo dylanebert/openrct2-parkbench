@@ -4,6 +4,8 @@
 #include <nlohmann/json.hpp>
 #include <openrct2/GameState.h>
 #include <openrct2/world/Location.hpp>
+#include <array>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -17,6 +19,52 @@ namespace OpenRCT2::Testing
     // before an action runs and are retained when the engine removes an entity
     // or tile element, so a post-state scan cannot make a clearing mutation
     // disappear from the contract projection.
+    enum class TileRole : uint8_t
+    {
+        track,
+        entrance,
+        exit,
+        queue,
+    };
+
+    struct TileRoleHandle
+    {
+        TileRole role;
+        TileCoordsXY coords;
+    };
+
+    struct CampaignHandle
+    {
+        uint8_t type{};
+        RideId ride{ RideId::GetNull() };
+    };
+
+    struct NewsHandle
+    {
+        bool archived{};
+        size_t slot{};
+    };
+
+    struct ProjectionFixtureHandles
+    {
+        RideId ride{ RideId::GetNull() };
+        EntityId linkedGuest{ EntityId::GetNull() };
+        EntityId queueGuest{ EntityId::GetNull() };
+        EntityId vehicleHead{ EntityId::GetNull() };
+        EntityId vehicleTail{ EntityId::GetNull() };
+        BannerIndex banner{ BannerIndex::GetNull() };
+        CampaignHandle campaign;
+        NewsHandle recentNews;
+        NewsHandle archivedNews;
+        std::array<TileRoleHandle, 4> tiles{};
+    };
+
+    struct ProjectionFixtureResult
+    {
+        std::optional<ProjectionFixtureHandles> handles;
+        std::string failure;
+    };
+
     struct RideProjectionWatchSet
     {
         std::set<uint16_t> rideIds;
@@ -30,9 +78,12 @@ namespace OpenRCT2::Testing
         std::vector<uint16_t> bannerIds;
         std::vector<std::pair<uint8_t, uint16_t>> campaignKeys;
         std::vector<TileCoordsXY> tileCoords;
+        std::optional<ProjectionFixtureHandles> fixtureHandles;
     };
 
     RideProjectionWatchSet CaptureRideProjectionWatchSet(const GameState_t& state, const json_t& args);
+    void SetProjectionFixtureHandles(const ProjectionFixtureHandles& handles);
+    void ClearProjectionFixtureHandles();
     void SetRideProjectionWatchSet(RideProjectionWatchSet watch);
     void ClearRideProjectionWatchSet();
     json_t SerializeRideProjection(const GameState_t& state, const json_t& args, const RideProjectionWatchSet& watch);

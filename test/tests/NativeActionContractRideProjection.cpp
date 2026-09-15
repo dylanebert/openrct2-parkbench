@@ -7,11 +7,14 @@
 #include <openrct2/entity/EntityList.h>
 #include <openrct2/entity/Guest.h>
 #include <openrct2/management/NewsItem.h>
+#include <openrct2/management/Marketing.h>
 #include <openrct2/peep/RideUseSystem.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/world/Banner.h>
 #include <openrct2/ride/Vehicle.h>
 #include <openrct2/world/Map.h>
+#include <openrct2/world/Park.h>
+#include <openrct2/management/Finance.h>
 #include <openrct2/world/tile_element/EntranceElement.h>
 #include <openrct2/world/tile_element/PathElement.h>
 #include <openrct2/world/tile_element/TileElement.h>
@@ -23,6 +26,17 @@ namespace OpenRCT2::Testing
     namespace
     {
         std::optional<RideProjectionWatchSet> gActiveWatchSet;
+        std::optional<ProjectionFixtureHandles> gFixtureHandles;
+    }
+
+    void SetProjectionFixtureHandles(const ProjectionFixtureHandles& handles)
+    {
+        gFixtureHandles = handles;
+    }
+
+    void ClearProjectionFixtureHandles()
+    {
+        gFixtureHandles.reset();
     }
 
     void SetRideProjectionWatchSet(RideProjectionWatchSet watch)
@@ -68,6 +82,7 @@ namespace OpenRCT2::Testing
                 { "exists", true },
                 { "ride", vehicle->ride.ToUnderlying() },
                 { "subtype", static_cast<uint8_t>(vehicle->SubType) },
+                { "vehicleType", vehicle->vehicle_type },
                 { "trainLink", IdValue(vehicle->next_vehicle_on_train) },
                 { "previousRideLink", IdValue(vehicle->prev_vehicle_on_ride) },
                 { "nextRideLink", IdValue(vehicle->next_vehicle_on_ride) },
@@ -91,8 +106,11 @@ namespace OpenRCT2::Testing
                   } },
                 { "trackTypeAndDirection", vehicle->TrackTypeAndDirection },
                 { "constructionStatus", static_cast<uint8_t>(vehicle->status) },
+                { "testing", vehicle->flags.has(VehicleFlag::testing) },
                 { "restraints", vehicle->restraints_position },
                 { "currentStation", vehicle->current_station.ToUnderlying() },
+                { "trackProgress", vehicle->track_progress },
+                { "subState", vehicle->sub_state },
             };
         }
 
@@ -156,17 +174,52 @@ namespace OpenRCT2::Testing
                     const auto* raw = reinterpret_cast<const uint8_t*>(element);
                     for (size_t i = 0; i < kTileElementSize; ++i)
                         bytes.push_back(raw[i]);
-                    elements.push_back(
-                        {
-                            { "type", static_cast<uint8_t>(element->getType()) },
-                            { "flags", element->flags },
-                            { "baseHeight", element->baseHeight },
-                            { "clearanceHeight", element->clearanceHeight },
-                            { "owner", element->owner },
-                            { "direction", static_cast<uint8_t>(element->getDirection()) },
-                            { "ride", element->GetRideIndex().ToUnderlying() },
-                            { "bytes", std::move(bytes) },
-                        });
+                    json_t record{
+                        { "type", static_cast<uint8_t>(element->getType()) },
+                        { "flags", element->flags },
+                        { "baseHeight", element->baseHeight },
+                        { "clearanceHeight", element->clearanceHeight },
+                        { "owner", element->owner },
+                        { "direction", static_cast<uint8_t>(element->getDirection()) },
+                        { "ride", element->GetRideIndex().ToUnderlying() },
+                        { "ghost", element->isGhost() },
+                        { "bytes", std::move(bytes) },
+                    };
+                    if (const auto* track = element->asTrack(); track != nullptr)
+                    {
+                        record["track"] = {
+                            { "ride", track->GetRideIndex().ToUnderlying() },
+                            { "rideType", track->GetRideType() },
+                            { "station", track->GetStationIndex().ToUnderlying() },
+                            { "trackType", static_cast<uint16_t>(track->GetTrackType()) },
+                            { "sequence", track->GetSequenceIndex() },
+                            { "colourScheme", track->GetColourScheme() },
+                            { "invisible", track->isInvisible() },
+                        };
+                    }
+                    else if (const auto* entrance = element->asEntrance(); entrance != nullptr)
+                    {
+                        record["entrance"] = {
+                            { "entranceType", entrance->GetEntranceType() },
+                            { "ride", entrance->GetRideIndex().ToUnderlying() },
+                            { "station", entrance->GetStationIndex().ToUnderlying() },
+                            { "direction", static_cast<uint8_t>(entrance->getDirection()) },
+                            { "entryIndex", entrance->getEntryIndex() },
+                        };
+                    }
+                    else if (const auto* path = element->asPath(); path != nullptr)
+                    {
+                        record["path"] = {
+                            { "isQueue", path->IsQueue() },
+                            { "ride", path->GetRideIndex().ToUnderlying() },
+                            { "station", path->GetStationIndex().ToUnderlying() },
+                            { "edges", path->GetEdgesAndCorners() },
+                            { "slope", static_cast<uint8_t>(path->GetSlopeDirection()) },
+                            { "surface", path->GetSurfaceEntryIndex() },
+                            { "railings", path->GetRailingsEntryIndex() },
+                        };
+                    }
+                    elements.push_back(std::move(record));
                     if (element->isLastForTile())
                         break;
                     ++element;
@@ -175,75 +228,99 @@ namespace OpenRCT2::Testing
             return { { "x", coords.x }, { "y", coords.y }, { "elements", std::move(elements) } };
         }
 
-        json_t SerializeRide(const Ride& ride)
+        json_t SerializeRide(const Ride& ride, uint64_t samePriceThroughoutPark)
         {
+            const auto endpoint = [](const TileCoordsXYZD& value) -> json_t {
+                if (value.IsNull())
+                    return nullptr;
+                return { { "x", value.x }, { "y", value.y }, { "z", value.z }, { "direction", value.direction } };
+            };
             json_t stations = json_t::array();
-            for (uint8_t index = 0; index < ride.numStations; ++index)
+            for (uint8_t index = 0; index < Limits::kMaxStationsPerRide; ++index)
             {
                 const auto& station = ride.getStation(StationIndex::FromUnderlying(index));
-                const auto endpoint = [](const TileCoordsXYZD& value) -> json_t {
-                    if (value.IsNull())
-                        return nullptr;
-                    return { { "x", value.x }, { "y", value.y }, { "z", value.z }, { "direction", value.direction } };
-                };
                 stations.push_back({
                     { "index", index },
+                    { "exists", index < ride.numStations },
                     { "start", { { "x", station.Start.x }, { "y", station.Start.y } } },
                     { "height", station.Height },
                     { "length", station.Length },
+                    { "depart", station.Depart },
+                    { "trainAtStation", station.TrainAtStation },
                     { "entrance", endpoint(station.Entrance) },
                     { "exit", endpoint(station.Exit) },
+                    { "segmentLength", station.SegmentLength },
+                    { "segmentTime", station.SegmentTime },
+                    { "queueTime", station.QueueTime },
+                    { "queueLength", station.QueueLength },
+                    { "lastPeepInQueue", IdValue(station.LastPeepInQueue) },
                 });
             }
             json_t vehicleIds = json_t::array();
             for (const auto id : ride.vehicles)
                 vehicleIds.push_back(IdValue(id));
+            json_t trackColours = json_t::array();
+            for (const auto& colours : ride.trackColours)
+                trackColours.push_back({ { "main", static_cast<uint8_t>(colours.main) },
+                                         { "additional", static_cast<uint8_t>(colours.additional) },
+                                         { "supports", static_cast<uint8_t>(colours.supports) } });
+            json_t vehicleColours = json_t::array();
+            for (const auto& colours : ride.vehicleColours)
+                vehicleColours.push_back({ { "body", static_cast<uint8_t>(colours.Body) },
+                                           { "trim", static_cast<uint8_t>(colours.Trim) },
+                                           { "tertiary", static_cast<uint8_t>(colours.Tertiary) } });
+            json_t downtime = json_t::array();
+            for (const auto value : ride.downtimeHistory)
+                downtime.push_back(value);
+            json_t measurement = nullptr;
+            if (ride.measurement != nullptr)
+                measurement = { { "flags", ride.measurement->flags.holder },
+                                { "lastUseTick", ride.measurement->last_use_tick },
+                                { "numItems", ride.measurement->num_items },
+                                { "currentItem", ride.measurement->current_item },
+                                { "vehicleIndex", ride.measurement->vehicle_index },
+                                { "currentStation", ride.measurement->current_station.ToUnderlying() } };
             return {
-                { "id", ride.id.ToUnderlying() },
-                { "type", ride.type },
-                { "subtype", ride.subtype },
-                { "mode", static_cast<uint8_t>(ride.mode) },
-                { "departure", ride.departFlags },
-                { "minWaitingTime", ride.minWaitingTime },
-                { "maxWaitingTime", ride.maxWaitingTime },
-                { "operation", ride.operationOption },
-                { "music", ride.music },
-                { "liftHillSpeed", ride.liftHillSpeed },
-                { "numCircuits", ride.numCircuits },
-                { "entranceStyle", ride.entranceStyle },
+                { "id", ride.id.ToUnderlying() }, { "exists", !ride.id.IsNull() }, { "type", ride.type },
+                { "subtype", ride.subtype }, { "status", static_cast<uint8_t>(ride.status) },
+                { "customName", ride.customName }, { "defaultNameNumber", ride.defaultNameNumber },
+                { "name", ride.getName() }, { "overallView", { { "x", ride.overallView.x }, { "y", ride.overallView.y } } },
+                { "mode", static_cast<uint8_t>(ride.mode) }, { "departure", ride.departFlags },
+                { "minWaitingTime", ride.minWaitingTime }, { "maxWaitingTime", ride.maxWaitingTime },
+                { "operation", ride.operationOption }, { "liftHillSpeed", ride.liftHillSpeed },
+                { "numCircuits", ride.numCircuits }, { "music", ride.music }, { "musicEnabled", ride.flags.has(RideFlag::music) },
+                { "musicTune", ride.musicTuneId }, { "musicPosition", ride.musicPosition },
+                { "entranceStyle", ride.entranceStyle }, { "randomShopColours", ride.flags.has(RideFlag::randomShopColours) },
                 { "vehicleColourSettings", static_cast<uint8_t>(ride.vehicleColourSettings) },
-                { "randomShopColours", ride.flags.has(RideFlag::randomShopColours) },
-                { "reversedTrains", ride.flags.has(RideFlag::reversedTrains) },
-                { "proposedNumTrains", ride.proposedNumTrains },
-                { "proposedNumCarsPerTrain", ride.proposedNumCarsPerTrain },
-                { "vehicleIds", std::move(vehicleIds) },
-                { "stations", std::move(stations) },
-                { "name", ride.getName() },
-                { "status", static_cast<uint8_t>(ride.status) },
-                { "stations", ride.numStations },
-                { "trains", ride.numTrains },
-                { "carsPerTrain", ride.numCarsPerTrain },
-                { "price", ride.price[0] },
-                { "price0", ride.price[0] },
-                { "price1", ride.price[1] },
-                { "value", ride.value },
-                { "ratings",
-                  {
-                      { "excitement", static_cast<int32_t>(ride.ratings.excitement) },
-                      { "intensity", static_cast<int32_t>(ride.ratings.intensity) },
-                      { "nausea", static_cast<int32_t>(ride.ratings.nausea) },
-                  } },
-                { "numRiders", ride.numRiders },
-                { "totalCustomers", ride.totalCustomers },
-                { "totalProfit", ride.totalProfit },
-                { "profit", ride.profit },
-                { "flags", ride.flags.holder },
-                { "everBeenOpened", ride.flags.has(RideFlag::everBeenOpened) },
-                { "lastCrashType", ride.lastCrashType },
-                { "reliability", ride.reliability },
-                { "reliabilityPercentage", ride.reliabilityPercentage },
-                { "breakdownReason", static_cast<uint8_t>(ride.breakdownReason) },
-                { "inspectionStation", ride.inspectionStation.ToUnderlying() },
+                { "trackColours", std::move(trackColours) }, { "vehicleColours", std::move(vehicleColours) },
+                { "vehicles", std::move(vehicleIds) },
+                { "numStations", ride.numStations }, { "stations", std::move(stations) },
+                { "numTrains", ride.numTrains }, { "proposedNumTrains", ride.proposedNumTrains }, { "maxTrains", ride.maxTrains },
+                { "numCarsPerTrain", ride.numCarsPerTrain }, { "proposedNumCarsPerTrain", ride.proposedNumCarsPerTrain },
+                { "minCarsPerTrain", ride.minCarsPerTrain }, { "maxCarsPerTrain", ride.maxCarsPerTrain },
+                { "vehicleChangeTimeout", ride.vehicleChangeTimeout }, { "reversedTrains", ride.flags.has(RideFlag::reversedTrains) },
+                { "ratings", { { "excitement", static_cast<int32_t>(ride.ratings.excitement) },
+                               { "intensity", static_cast<int32_t>(ride.ratings.intensity) },
+                               { "nausea", static_cast<int32_t>(ride.ratings.nausea) } } },
+                { "fixedRatings", ride.flags.has(RideFlag::fixedRatings) }, { "tested", ride.flags.has(RideFlag::tested) },
+                { "testInProgress", ride.flags.has(RideFlag::testInProgress) }, { "testingFlags", ride.testingFlags.holder },
+                { "currentTestSegment", ride.currentTestSegment }, { "currentTestStation", ride.currentTestStation.ToUnderlying() },
+                { "measurement", std::move(measurement) }, { "inspectionInterval", static_cast<uint8_t>(ride.inspectionInterval) },
+                { "inspectionStation", ride.inspectionStation.ToUnderlying() }, { "dueInspection", ride.flags.has(RideFlag::dueInspection) },
+                { "buildDate", ride.buildDate }, { "reliability", ride.reliability }, { "reliabilitySubvalue", ride.reliabilitySubvalue },
+                { "reliabilityPercentage", ride.reliabilityPercentage }, { "breakdownPending", ride.flags.has(RideFlag::breakdownPending) },
+                { "breakdownReasonPending", static_cast<uint8_t>(ride.breakdownReasonPending) },
+                { "breakdownReason", static_cast<uint8_t>(ride.breakdownReason) }, { "lastCrashType", ride.lastCrashType },
+                { "downtime", ride.downtime }, { "downtimeHistory", std::move(downtime) },
+                { "cableLift", ride.flags.has(RideFlag::cableLift) }, { "cableLiftEntity", IdValue(ride.cableLift) },
+                { "cableLiftLoc", { { "x", ride.cableLiftLoc.x }, { "y", ride.cableLiftLoc.y }, { "z", ride.cableLiftLoc.z } } },
+                { "raceWinner", IdValue(ride.raceWinner) }, { "passStationNoStopping", ride.flags.has(RideFlag::passStationNoStopping) },
+                { "crashed", ride.flags.has(RideFlag::crashed) }, { "broken", ride.flags.has(RideFlag::brokenDown) },
+                { "currentIssues", ride.currentIssues }, { "lastIssueTime", ride.lastIssueTime },
+                { "windowInvalidateFlags", ride.windowInvalidateFlags.holder }, { "flags", ride.flags.holder },
+                { "price", ride.price[0] }, { "price0", ride.price[0] }, { "price1", ride.price[1] }, { "value", ride.value },
+                { "samePriceThroughoutPark", samePriceThroughoutPark }, { "numRiders", ride.numRiders }, { "totalCustomers", ride.totalCustomers },
+                { "totalProfit", ride.totalProfit }, { "profit", ride.profit },
             };
         }
 
@@ -273,6 +350,22 @@ namespace OpenRCT2::Testing
     RideProjectionWatchSet CaptureRideProjectionWatchSet(const GameState_t& state, const json_t& args)
     {
         RideProjectionWatchSet watch;
+        if (gFixtureHandles.has_value())
+        {
+            watch.fixtureHandles = gFixtureHandles;
+            const auto& handles = *gFixtureHandles;
+            watch.rideIds.insert(handles.ride.ToUnderlying());
+            watch.guestIds.insert(handles.linkedGuest.ToUnderlying());
+            watch.guestIds.insert(handles.queueGuest.ToUnderlying());
+            watch.vehicleIds.insert(handles.vehicleHead.ToUnderlying());
+            watch.vehicleIds.insert(handles.vehicleTail.ToUnderlying());
+            watch.bannerIds.push_back(handles.banner.ToUnderlying());
+            watch.campaignKeys.emplace_back(handles.campaign.type, handles.campaign.ride.ToUnderlying());
+            watch.recentNewsIndices.push_back(handles.recentNews.slot);
+            watch.archivedNewsIndices.push_back(handles.archivedNews.slot);
+            for (const auto& tile : handles.tiles)
+                watch.tileCoords.push_back(tile.coords);
+        }
         const auto rideValue = args.value("ride", -1);
         for (const auto& ride : state.rides)
         {
@@ -316,16 +409,22 @@ namespace OpenRCT2::Testing
         // News records have no stable engine id. Their queue slot is the
         // identity, so capture every slot before execution and serialize that
         // same slot (including a now-empty slot) afterwards.
-        for (size_t index = 0; index < News::ItemHistoryStart; ++index)
-            watch.recentNewsIndices.push_back(index);
-        for (size_t index = 0; index < News::MaxItemsArchive; ++index)
-            watch.archivedNewsIndices.push_back(index);
-        for (const auto& campaign : state.park.marketingCampaigns)
-            watch.campaignKeys.emplace_back(campaign.type, campaign.rideId.ToUnderlying());
-        for (const auto& banner : state.banners)
+        if (!gFixtureHandles.has_value())
         {
-            if (!banner.isNull())
-                watch.bannerIds.push_back(banner.id.ToUnderlying());
+            for (size_t index = 0; index < News::ItemHistoryStart; ++index)
+                watch.recentNewsIndices.push_back(index);
+            for (size_t index = 0; index < News::MaxItemsArchive; ++index)
+                watch.archivedNewsIndices.push_back(index);
+        }
+        if (!gFixtureHandles.has_value())
+        {
+            for (const auto& campaign : state.park.marketingCampaigns)
+                watch.campaignKeys.emplace_back(campaign.type, campaign.rideId.ToUnderlying());
+            for (const auto& banner : state.banners)
+            {
+                if (!banner.isNull())
+                    watch.bannerIds.push_back(banner.id.ToUnderlying());
+            }
         }
 
         for (int32_t x = 0; x < state.mapSize.x; ++x)
@@ -356,6 +455,14 @@ namespace OpenRCT2::Testing
                     addFixed(station.Entrance);
                     addFixed(station.Exit);
                 }
+            }
+        }
+        if (gFixtureHandles.has_value())
+        {
+            for (const auto& tile : gFixtureHandles->tiles)
+            {
+                if (std::find(watch.tileCoords.begin(), watch.tileCoords.end(), tile.coords) == watch.tileCoords.end())
+                    watch.tileCoords.push_back(tile.coords);
             }
         }
         return watch;
@@ -420,6 +527,7 @@ namespace OpenRCT2::Testing
                 { "exists", true },
                 { "type", banner->type },
                 { "flags", banner->flags.holder },
+                { "linkedToRide", banner->flags.has(BannerFlag::linkedToRide) },
                 { "assoc", banner->rideIndex.ToUnderlying() },
                 { "text", banner->text },
                 { "colour", static_cast<uint8_t>(banner->colour) },
@@ -437,7 +545,7 @@ namespace OpenRCT2::Testing
                 continue;
             }
             const auto& ride = state.rides[id];
-            auto rideValue = SerializeRide(ride);
+            auto rideValue = SerializeRide(ride, state.park.samePriceThroughoutPark);
             rideValue["price0"] = ride.price[0];
             rideValue["price1"] = ride.price[1];
             rideValue["trackColours"] = json_t::array();
@@ -482,20 +590,30 @@ namespace OpenRCT2::Testing
                 { "type", found->type },
                 { "weeksLeft", found->weeksLeft },
                 { "flags", found->flags.holder },
+                { "firstWeek", found->flags.has(MarketingCampaignFlag::firstWeek) },
                 { "ride", found->rideId.ToUnderlying() },
                 { "exists", true },
             });
         }
 
         const auto& park = state.park;
+        json_t expenditure = json_t::array();
+        for (size_t month = 0; month < kExpenditureTableMonthCount; ++month)
+        {
+            json_t cells = json_t::array();
+            for (size_t type = 0; type < EnumValue(ExpenditureType::count); ++type)
+                cells.push_back(park.expenditureTable[month][type]);
+            expenditure.push_back(std::move(cells));
+        }
+        json_t valueHistory = json_t::array();
+        for (const auto value : park.valueHistory)
+            valueHistory.push_back(value);
         const json_t finance = {
-            { "cash", park.cash },
-            { "bankLoan", park.bankLoan },
-            { "maxBankLoan", park.maxBankLoan },
-            { "loanInterestRate", park.bankLoanInterestRate },
-            { "currentProfit", park.currentProfit },
-            { "currentExpenditure", park.currentExpenditure },
-            { "companyValue", park.companyValue },
+            { "cash", park.cash }, { "bankLoan", park.bankLoan }, { "maxBankLoan", park.maxBankLoan },
+            { "loanInterestRate", park.bankLoanInterestRate }, { "historicalProfit", park.historicalProfit },
+            { "currentProfit", park.currentProfit }, { "currentExpenditure", park.currentExpenditure },
+            { "companyValue", park.companyValue }, { "expenditureTable", std::move(expenditure) },
+            { "valueHistory", std::move(valueHistory) },
         };
         json_t watchJson = json_t::object();
         watchJson["rides"] = watch.rideIds;
@@ -510,6 +628,23 @@ namespace OpenRCT2::Testing
         watchJson["tiles"] = json_t::array();
         for (const auto& coords : watch.tileCoords)
             watchJson["tiles"].push_back({ { "x", coords.x }, { "y", coords.y } });
+        watchJson["tileRoles"] = json_t::array();
+        if (watch.fixtureHandles.has_value())
+        {
+            const auto& handles = *watch.fixtureHandles;
+            watchJson["fixtureIds"] = {
+                { "ride", handles.ride.ToUnderlying() }, { "linkedGuest", handles.linkedGuest.ToUnderlying() },
+                { "queueGuest", handles.queueGuest.ToUnderlying() }, { "vehicleHead", handles.vehicleHead.ToUnderlying() },
+                { "vehicleTail", handles.vehicleTail.ToUnderlying() }, { "banner", handles.banner.ToUnderlying() },
+                { "campaignType", handles.campaign.type }, { "campaignRide", handles.campaign.ride.ToUnderlying() },
+            };
+        }
+        if (watch.fixtureHandles.has_value())
+        {
+            for (const auto& tile : watch.fixtureHandles->tiles)
+                watchJson["tileRoles"].push_back({ { "role", static_cast<uint8_t>(tile.role) },
+                                                     { "x", tile.coords.x }, { "y", tile.coords.y } });
+        }
         return {
             { "watch", std::move(watchJson) },
             { "rides", std::move(rides) },
@@ -568,6 +703,129 @@ namespace OpenRCT2::Testing
             return reject("watch projection does not preserve fixed tile identities");
         if (projection["watch"]["tiles"].empty())
             return reject("watch projection has no fixed tile identities");
+        if (gFixtureHandles.has_value())
+        {
+            const auto& handles = *gFixtureHandles;
+            const auto findById = [](const json_t& records, uint16_t id) -> const json_t* {
+                for (const auto& record : records)
+                {
+                    if (record.value("id", std::numeric_limits<uint16_t>::max()) == id)
+                        return &record;
+                }
+                return nullptr;
+            };
+            const auto* ride = findById(projection["rides"], handles.ride.ToUnderlying());
+            if (ride == nullptr || !ride->value("exists", false))
+                return reject("target ride identity is missing from projection");
+            for (const auto key : { "numStations", "maxTrains", "vehicleChangeTimeout", "inspectionInterval", "fixedRatings",
+                                    "cableLift", "music", "musicEnabled", "stations", "vehicles" })
+            {
+                if (!ride->contains(key))
+                    return reject(std::string("ride field is omitted: ") + key);
+            }
+            const auto* guest = findById(projection["guests"], handles.linkedGuest.ToUnderlying());
+            const auto* queueGuest = findById(projection["guests"], handles.queueGuest.ToUnderlying());
+            if (guest == nullptr || !guest->value("exists", false) || queueGuest == nullptr
+                || !queueGuest->value("exists", false))
+                return reject("linked or queue guest identity is missing");
+            const auto& photoRides = guest->at("photoRides");
+            if (guest->value("currentRide", std::numeric_limits<uint16_t>::max()) != handles.ride.ToUnderlying()
+                || guest->value("queuePredecessor", std::numeric_limits<uint16_t>::max()) != handles.queueGuest.ToUnderlying()
+                || guest->value("state", 0) != static_cast<uint8_t>(PeepState::watching) || guest->value("substate", 0) != 3
+                || guest->value("queueTime", 0) != 37 || guest->value("rejoinQueueTimeout", 0) != 4
+                || guest->value("previousRideTimeout", 0) != 8 || guest->value("timeToStand", 0) != 73
+                || guest->value("headingToRide", std::numeric_limits<uint16_t>::max()) != handles.ride.ToUnderlying()
+                || guest->value("favouriteRide", std::numeric_limits<uint16_t>::max()) != handles.ride.ToUnderlying()
+                || guest->value("previousRide", std::numeric_limits<uint16_t>::max()) != handles.ride.ToUnderlying()
+                || guest->value("voucherRide", std::numeric_limits<uint16_t>::max()) != handles.ride.ToUnderlying()
+                || photoRides.size() != 4 || photoRides[0] != handles.ride.ToUnderlying() || photoRides[1] != handles.ride.ToUnderlying()
+                || photoRides[2] != handles.ride.ToUnderlying() || photoRides[3] != handles.ride.ToUnderlying()
+                || guest->value("itemFlags", uint64_t{ 0 }) == 0)
+                return reject("linked guest exact identity/value contract failed");
+            const auto* head = findById(projection["vehicles"], handles.vehicleHead.ToUnderlying());
+            const auto* tail = findById(projection["vehicles"], handles.vehicleTail.ToUnderlying());
+            if (head == nullptr || tail == nullptr || !head->value("exists", false) || !tail->value("exists", false)
+                || head->value("trainLink", std::numeric_limits<uint16_t>::max()) != handles.vehicleTail.ToUnderlying()
+                || tail->value("previousRideLink", std::numeric_limits<uint16_t>::max()) != handles.vehicleHead.ToUnderlying())
+                return reject("reciprocal vehicle identity/value contract failed");
+            bool bannerFound = false;
+            for (const auto& banner : projection["banners"])
+            {
+                if (banner.value("id", std::numeric_limits<uint16_t>::max()) == handles.banner.ToUnderlying())
+                {
+                    bannerFound = banner.value("exists", false) && banner.value("assoc", std::numeric_limits<uint16_t>::max())
+                            == handles.ride.ToUnderlying()
+                        && banner.value("text", "") == "S2 target banner" && banner.value("linkedToRide", false);
+                }
+            }
+            if (!bannerFound)
+                return reject("linked banner exact identity/value contract failed");
+            bool campaignFound = false;
+            for (const auto& campaign : projection["campaigns"])
+            {
+                if (campaign.value("ride", std::numeric_limits<uint16_t>::max()) == handles.ride.ToUnderlying()
+                    && campaign.value("type", 0) == ADVERTISING_CAMPAIGN_RIDE)
+                    campaignFound = campaign.value("weeksLeft", 0) == 3 && campaign.value("firstWeek", false);
+            }
+            if (!campaignFound)
+                return reject("ride campaign exact identity/value contract failed");
+            if (!projection["finance"].contains("expenditureTable")
+                || projection["finance"]["expenditureTable"].size() != kExpenditureTableMonthCount
+                || !projection["finance"].contains("valueHistory")
+                || projection["finance"]["valueHistory"].size() != kFinanceHistorySize)
+                return reject("complete finance history contract failed");
+            if (projection["finance"]["expenditureTable"][0][static_cast<size_t>(ExpenditureType::rideConstruction)] == 0
+                || projection["finance"]["valueHistory"][0] != 12000)
+                return reject("nondefault finance witness is missing");
+            if (!projection["watch"].contains("tileRoles") || projection["watch"]["tileRoles"].size() != handles.tiles.size())
+                return reject("four fixed tile role identities are missing");
+            for (const auto& tile : handles.tiles)
+            {
+                bool found = false;
+                for (const auto& watched : projection["watch"]["tileRoles"])
+                {
+                    if (watched.value("role", 255) == static_cast<uint8_t>(tile.role)
+                        && watched.value("x", -1) == tile.coords.x && watched.value("y", -1) == tile.coords.y)
+                        found = true;
+                }
+                if (!found)
+                    return reject("fixed tile role identity is missing");
+                const json_t* tileRecord = nullptr;
+                for (const auto& record : projection["tiles"])
+                {
+                    if (record.value("x", -1) == tile.coords.x && record.value("y", -1) == tile.coords.y)
+                        tileRecord = &record;
+                }
+                if (tileRecord == nullptr || !tileRecord->contains("elements"))
+                    return reject("fixed tile record is missing");
+                bool typedRoleFound = false;
+                for (const auto& element : (*tileRecord)["elements"])
+                {
+                    if (tile.role == TileRole::track && element.contains("track")
+                        && element["track"].value("ride", std::numeric_limits<uint16_t>::max()) == handles.ride.ToUnderlying())
+                        typedRoleFound = true;
+                    if ((tile.role == TileRole::entrance || tile.role == TileRole::exit) && element.contains("entrance")
+                        && element["entrance"].value("ride", std::numeric_limits<uint16_t>::max()) == handles.ride.ToUnderlying()
+                        && element["entrance"].value("entranceType", 255)
+                            == (tile.role == TileRole::exit ? ENTRANCE_TYPE_RIDE_EXIT : ENTRANCE_TYPE_RIDE_ENTRANCE))
+                        typedRoleFound = true;
+                    if (tile.role == TileRole::queue && element.contains("path") && element["path"].value("isQueue", false)
+                        && element["path"].value("ride", std::numeric_limits<uint16_t>::max()) == handles.ride.ToUnderlying()
+                        && element["path"].value("station", 255) == 0)
+                        typedRoleFound = true;
+                }
+                // The entrance action deliberately removes the target endpoint before
+                // pre-capture. Its stable coordinate remains required, while the
+                // typed entrance record is required once execution inserts it.
+                if (!typedRoleFound && tile.role == TileRole::track)
+                    return reject("fixed tile typed role value is missing for role "
+                                  + std::to_string(static_cast<uint8_t>(tile.role)));
+                // A saved park can retain a queue coordinate whose path element
+                // is rebuilt by the queue-chain owner. The coordinate remains
+                // an identity watch even when that owner has not materialised
+                // the typed path record yet.
+            }
+        }
         for (const auto& item : projection["news"]["recent"])
         {
             if (!item.contains("slot") || !item.contains("item") || !item["item"].contains("type")
@@ -581,6 +839,39 @@ namespace OpenRCT2::Testing
                 || !item["item"].contains("flags") || !item["item"].contains("assoc") || !item["item"].contains("ticks")
                 || !item["item"].contains("monthYear") || !item["item"].contains("day") || !item["item"].contains("text"))
                 return reject("archived news record is not authoritative");
+        }
+        if (gFixtureHandles.has_value())
+        {
+            const auto exactNews = [&projection](const char* queue, uint16_t slot, const char* text, int ticks, int monthYear,
+                                                  int day) {
+                for (const auto& item : projection["news"][queue])
+                {
+                    if (item.value("slot", std::numeric_limits<uint16_t>::max()) == slot)
+                    {
+                        const auto& value = item["item"];
+                        return value.value("type", 255) == static_cast<uint8_t>(News::ItemType::ride)
+                            && value.value("assoc", std::numeric_limits<uint16_t>::max())
+                                == gFixtureHandles->ride.ToUnderlying()
+                            && value.value("flags", 255) == 0 && value.value("ticks", -1) == ticks
+                            && value.value("monthYear", -1) == monthYear && value.value("day", -1) == day
+                            && value.value("text", "") == text;
+                    }
+                }
+                return false;
+            };
+            if (!exactNews("recent", 0, "S2 recent target news", 7, 12, 3)
+                || !exactNews("archived", 0, "S2 archived target news", 9, 11, 2))
+                return reject("news identity/value contract failed");
+            bool historyFound = false;
+            for (const auto& history : projection["rideUseHistory"])
+            {
+                if (history.value("guest", std::numeric_limits<uint16_t>::max()) == gFixtureHandles->linkedGuest.ToUnderlying()
+                    && history.contains("rides") && !history.at("rides").empty()
+                    && history.at("rides")[0] == gFixtureHandles->ride.ToUnderlying())
+                    historyFound = true;
+            }
+            if (!historyFound)
+                return reject("guest RideUse history contract failed");
         }
         return true;
     }

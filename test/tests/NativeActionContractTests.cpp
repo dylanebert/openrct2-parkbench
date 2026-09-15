@@ -43,6 +43,9 @@
 #include <openrct2/entity/EntityList.h>
 #include <openrct2/entity/Guest.h>
 #include <openrct2/management/Marketing.h>
+#include <openrct2/management/Finance.h>
+#include <openrct2/ride/ShopItem.h>
+#include <openrct2/world/Park.h>
 #include <openrct2/management/NewsItem.h>
 #include <openrct2/object/ObjectManager.h>
 #include <openrct2/peep/RideUseSystem.h>
@@ -54,6 +57,7 @@
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
 #include <openrct2/world/tile_element/EntranceElement.h>
+#include <openrct2/world/tile_element/PathElement.h>
 #include <set>
 #include <sstream>
 #include <string>
@@ -67,6 +71,8 @@ using json_t = nlohmann::json;
 
 namespace
 {
+    std::string gProjectionFixtureFailure;
+
     enum class ExpectedCostClass
     {
         engineComputed,
@@ -723,82 +729,228 @@ namespace
         FindFixtureTrack(fixture->track, fixture->trackType);
     }
 
-    void PopulateRideProjectionFixture(GameState_t& state, RideId rideId)
+    OpenRCT2::Testing::ProjectionFixtureResult PopulateRideProjectionFixture(GameState_t& state, RideId rideId)
     {
-        // These are deliberate values, not presence aliases. They make every
-        // store in the action projection observable and keep the watch
-        // identities meaningful if demolition/clearing is added later.
-        state.newsItems[0] = {
-            News::ItemType::ride, 0, rideId.ToUnderlying(), 7, 12, 3, "S2 recent target news",
+        using OpenRCT2::Testing::ProjectionFixtureHandles;
+        using OpenRCT2::Testing::ProjectionFixtureResult;
+        ProjectionFixtureResult result;
+        const auto fail = [&result](std::string message) {
+            result.failure = std::move(message);
+            gProjectionFixtureFailure = result.failure;
+            result.handles.reset();
+            return result;
         };
+        auto* ride = GetRide(rideId);
+        if (ride == nullptr)
+            return fail("target ride store is missing");
+
+        state.newsItems[0] = { News::ItemType::ride, 0, rideId.ToUnderlying(), 7, 12, 3, "S2 recent target news" };
         state.newsItems[News::ItemHistoryStart] = {
-            News::ItemType::ride, 1, rideId.ToUnderlying(), 9, 11, 2, "S2 archived target news",
+            News::ItemType::ride, 0, rideId.ToUnderlying(), 9, 11, 2, "S2 archived target news"
         };
+        state.park.marketingCampaigns.erase(
+            std::remove_if(state.park.marketingCampaigns.begin(), state.park.marketingCampaigns.end(),
+                           [rideId](const auto& campaign) { return campaign.rideId == rideId; }),
+            state.park.marketingCampaigns.end());
         MarketingCampaign campaign{};
-        campaign.type = 0;
+        campaign.type = ADVERTISING_CAMPAIGN_RIDE;
         campaign.weeksLeft = 3;
+        campaign.flags.set(MarketingCampaignFlag::firstWeek);
         campaign.rideId = rideId;
         state.park.marketingCampaigns.push_back(campaign);
+        state.park.cash = 100000;
+        state.park.bankLoan = 20000;
+        state.park.maxBankLoan = 50000;
+        state.park.bankLoanInterestRate = 7;
+        state.park.historicalProfit = 4321;
+        state.park.currentProfit = 2345;
+        state.park.currentExpenditure = 456;
+        state.park.companyValue = 34567;
+        state.park.expenditureTable[0][static_cast<size_t>(ExpenditureType::rideConstruction)] = 77;
+        state.park.expenditureTable[3][static_cast<size_t>(ExpenditureType::rideRunningCosts)] = 88;
         state.park.value = 12345;
         state.park.valueHistory[0] = 12000;
+        state.park.valueHistory[7] = 11900;
 
-        if (auto* banner = CreateBanner(); banner != nullptr)
-        {
-            banner->type = 0;
-            banner->rideIndex = rideId;
-            banner->text = "S2 target banner";
-            banner->colour = Drawing::Colour::brightRed;
-            banner->textColour = Drawing::TextColour::white;
-            banner->position = { 1, 1 };
-        }
+        auto* banner = CreateBanner();
+        if (banner == nullptr)
+            return fail("no banner store capacity");
+        banner->type = 0;
+        banner->flags.set(BannerFlag::linkedToRide);
+        banner->rideIndex = rideId;
+        banner->text = "S2 target banner";
+        banner->colour = Drawing::Colour::brightRed;
+        banner->textColour = Drawing::TextColour::white;
+        banner->position = { 1, 1 };
 
-        Guest* guest = nullptr;
-        for (const auto id : state.entities.GetEntityList(EntityType::guest))
-        {
-            guest = state.entities.GetEntity<Guest>(id);
-            if (guest != nullptr)
-                break;
-        }
-        if (guest == nullptr)
-            guest = state.entities.CreateEntity<Guest>();
-        if (guest != nullptr)
-        {
-            guest->CurrentRide = rideId;
-            guest->CurrentRideStation = StationIndex::FromUnderlying(0);
-            guest->CurrentTrain = 0;
-            guest->CurrentCar = 0;
-            guest->CurrentSeat = 0;
-            guest->rejoinQueueTimeout = 4;
-            guest->previousRide = rideId;
-            guest->previousRideTimeOut = 8;
-            guest->voucherRideId = rideId;
-            guest->photo1RideRef = rideId;
-            guest->favouriteRide = rideId;
-            guest->guestNextInQueue = EntityId::GetNull();
-            guest->thoughts[0].type = PeepThoughtType::wasGreat;
-            guest->thoughts[0].rideId = rideId;
-            guest->thoughts[0].freshness = 1;
-            guest->thoughts[0].fresh_timeout = 2;
-            RideUse::GetHistory().Add(guest->id, rideId);
+        auto* linkedGuest = state.entities.CreateEntity<Guest>();
+        auto* queueGuest = state.entities.CreateEntity<Guest>();
+        if (linkedGuest == nullptr || queueGuest == nullptr)
+            return fail("guest entity capacity is unavailable");
+        linkedGuest->State = PeepState::watching;
+        linkedGuest->SubState = 3;
+        linkedGuest->CurrentRide = rideId;
+        linkedGuest->CurrentRideStation = StationIndex::FromUnderlying(0);
+        linkedGuest->CurrentTrain = 0;
+        linkedGuest->CurrentCar = 0;
+        linkedGuest->CurrentSeat = 73;
+        linkedGuest->TimeToStand = 73;
+        linkedGuest->guestNextInQueue = queueGuest->id;
+        linkedGuest->timeInQueue = 37;
+        linkedGuest->rejoinQueueTimeout = 4;
+        linkedGuest->previousRide = rideId;
+        linkedGuest->previousRideTimeOut = 8;
+        linkedGuest->guestHeadingToRideId = rideId;
+        linkedGuest->voucherRideId = rideId;
+        linkedGuest->photo1RideRef = rideId;
+        linkedGuest->photo2RideRef = rideId;
+        linkedGuest->photo3RideRef = rideId;
+        linkedGuest->photo4RideRef = rideId;
+        linkedGuest->favouriteRide = rideId;
+        linkedGuest->PeepFlags = PEEP_FLAGS_LEAVING_PARK;
+        linkedGuest->giveItem(ShopItem::voucher);
+        linkedGuest->giveItem(ShopItem::photo);
+        linkedGuest->giveItem(ShopItem::photo2);
+        linkedGuest->giveItem(ShopItem::photo3);
+        linkedGuest->giveItem(ShopItem::photo4);
+        linkedGuest->thoughts[0].type = PeepThoughtType::wasGreat;
+        linkedGuest->thoughts[0].rideId = rideId;
+        linkedGuest->thoughts[0].freshness = 1;
+        linkedGuest->thoughts[0].fresh_timeout = 2;
+        queueGuest->State = PeepState::queuing;
+        queueGuest->SubState = 2;
+        queueGuest->CurrentRide = rideId;
+        queueGuest->CurrentRideStation = StationIndex::FromUnderlying(0);
+        RideUse::GetHistory().Add(linkedGuest->id, rideId);
 
-            auto* vehicle = state.entities.CreateEntity<Vehicle>();
-            if (vehicle != nullptr)
+        auto* head = state.entities.CreateEntity<Vehicle>();
+        auto* tail = state.entities.CreateEntity<Vehicle>();
+        if (head == nullptr || tail == nullptr)
+            return fail("vehicle entity capacity is unavailable");
+        head->SubType = Vehicle::Type::head;
+        tail->SubType = Vehicle::Type::tail;
+        head->ride = tail->ride = rideId;
+        head->next_vehicle_on_train = tail->id;
+        head->next_vehicle_on_ride = tail->id;
+        tail->prev_vehicle_on_ride = head->id;
+        head->status = Vehicle::Status::waitingForPassengers;
+        tail->status = Vehicle::Status::travelling;
+        head->num_seats = tail->num_seats = 2;
+        head->num_peeps = tail->num_peeps = 1;
+        head->next_free_seat = tail->next_free_seat = 1;
+        head->peep[0] = linkedGuest->id;
+        tail->peep[0] = queueGuest->id;
+        head->colours = { Drawing::Colour::brightRed, Drawing::Colour::darkBlue, Drawing::Colour::brightGreen };
+        tail->colours = { Drawing::Colour::yellow, Drawing::Colour::brightPurple, Drawing::Colour::lightOrange };
+        head->flags.set(VehicleFlag::testing);
+        tail->flags.set(VehicleFlag::testing);
+        head->TrackLocation = { ride->overallView, 12 };
+        tail->TrackLocation = { ride->overallView, 16 };
+        head->TrackTypeAndDirection = 0x1234;
+        tail->TrackTypeAndDirection = 0x2345;
+        head->restraints_position = 17;
+        tail->restraints_position = 29;
+        ride->vehicles[0] = head->id;
+        ride->vehicles[1] = tail->id;
+        ride->numTrains = 1;
+        ride->numCarsPerTrain = 2;
+        ride->maxTrains = std::max<uint8_t>(ride->maxTrains, 2);
+        auto& station = ride->getStation(StationIndex::FromUnderlying(0));
+        station.LastPeepInQueue = queueGuest->id;
+        station.QueueLength = 37;
+        station.QueueTime = 37;
+
+        std::array<std::optional<TileCoordsXY>, 4> tileRoles;
+        for (int32_t x = 0; x < state.mapSize.x; ++x)
+        {
+            for (int32_t y = 0; y < state.mapSize.y; ++y)
             {
-                vehicle->ride = rideId;
-                vehicle->num_seats = 2;
-                vehicle->num_peeps = 1;
-                vehicle->next_free_seat = 1;
-                vehicle->peep[0] = guest->id;
-                if (auto* ride = GetRide(rideId); ride != nullptr)
+                const TileCoordsXY coords{ x, y };
+                auto* element = MapGetFirstElementAt(coords);
+                if (element == nullptr)
+                    continue;
+                while (true)
                 {
-                    ride->vehicles[0] = vehicle->id;
-                    ride->numTrains = std::max<uint8_t>(ride->numTrains, 1);
+                    if (const auto* track = element->asTrack(); track != nullptr && !tileRoles[0].has_value()
+                        && track->GetRideIndex() == rideId)
+                        tileRoles[0] = coords;
+                    if (const auto* entrance = element->asEntrance(); entrance != nullptr
+                        && entrance->GetRideIndex() == rideId && entrance->GetStationIndex().ToUnderlying() == 0)
+                    {
+                        if (entrance->GetEntranceType() == ENTRANCE_TYPE_RIDE_ENTRANCE && !tileRoles[1].has_value())
+                            tileRoles[1] = coords;
+                        if (entrance->GetEntranceType() == ENTRANCE_TYPE_RIDE_EXIT && !tileRoles[2].has_value())
+                            tileRoles[2] = coords;
+                    }
+                    if (auto* path = element->asPath(); path != nullptr && path->IsQueue()
+                        && !tileRoles[3].has_value() && path->GetRideIndex() == rideId)
+                    {
+                        path->SetRideIndex(rideId);
+                        path->SetStationIndex(StationIndex::FromUnderlying(0));
+                        tileRoles[3] = coords;
+                    }
+                    if (element->isLastForTile())
+                        break;
+                    ++element;
                 }
-                guest->CurrentTrain = 0;
-                guest->CurrentCar = 0;
-                guest->CurrentSeat = 0;
             }
         }
+        if (!tileRoles[0] || !tileRoles[1] || !tileRoles[2])
+            return fail("track or station endpoint tile role is missing");
+        if (!tileRoles[3])
+        {
+            for (int32_t x = 0; x < state.mapSize.x && !tileRoles[3]; ++x)
+                for (int32_t y = 0; y < state.mapSize.y && !tileRoles[3]; ++y)
+                {
+                    const TileCoordsXY coords{ x, y };
+                    if (std::find(tileRoles.begin(), tileRoles.end() - 1, std::optional<TileCoordsXY>{ coords })
+                        != tileRoles.end() - 1)
+                        continue;
+                    auto* element = MapGetFirstElementAt(coords);
+                    if (element == nullptr)
+                        continue;
+                    while (true)
+                    {
+                        if (auto* path = element->asPath(); path != nullptr)
+                        {
+                            path->SetIsQueue(true);
+                            path->SetRideIndex(rideId);
+                            path->SetStationIndex(StationIndex::FromUnderlying(0));
+                            tileRoles[3] = coords;
+                            break;
+                        }
+                        if (element->isLastForTile())
+                            break;
+                        ++element;
+                    }
+                }
+        }
+        if (!tileRoles[3])
+            return fail("no deterministic queue path donor or free tile exists");
+        if (*tileRoles[0] == *tileRoles[1] || *tileRoles[0] == *tileRoles[2] || *tileRoles[0] == *tileRoles[3]
+            || *tileRoles[1] == *tileRoles[2] || *tileRoles[1] == *tileRoles[3] || *tileRoles[2] == *tileRoles[3])
+            return fail("track, entrance, exit and queue roles are not pairwise distinct");
+
+        ProjectionFixtureHandles handles;
+        handles.ride = rideId;
+        handles.linkedGuest = linkedGuest->id;
+        handles.queueGuest = queueGuest->id;
+        handles.vehicleHead = head->id;
+        handles.vehicleTail = tail->id;
+        handles.banner = banner->id;
+        handles.campaign = { ADVERTISING_CAMPAIGN_RIDE, rideId };
+        handles.recentNews = { false, 0 };
+        handles.archivedNews = { true, 0 };
+        handles.tiles = { OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::track, *tileRoles[0] },
+                          OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::entrance, *tileRoles[1] },
+                          OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::exit, *tileRoles[2] },
+                          OpenRCT2::Testing::TileRoleHandle{ OpenRCT2::Testing::TileRole::queue, *tileRoles[3] } };
+        if (Park::CalculateParkValue(state.park, state) == 12345)
+            return fail("calculated park value did not differ from stored witness");
+        OpenRCT2::Testing::SetProjectionFixtureHandles(handles);
+        gProjectionFixtureFailure.clear();
+        result.handles = handles;
+        return result;
     }
 
     json_t RideListProjection(const GameState_t& state)
@@ -1928,7 +2080,8 @@ namespace
                     { "station", 0 },
                     { "isExit", true },
                 };
-                PopulateRideProjectionFixture(state, ride->id);
+                if (!PopulateRideProjectionFixture(state, ride->id).handles)
+                    return;
             };
             fixture.legalArgs = [legalArgs] { return *legalArgs; };
             const auto removeEndpoint = [](GameState_t& state, const json_t& args) {
@@ -2242,7 +2395,13 @@ namespace
                 }
                 LoadPark("small_park_with_ferris_wheel.sv6");
                 auto& state = OpenRCT2::getGameState();
+                gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(state);
+                if (!gProjectionFixtureFailure.empty())
+                {
+                    failure = gProjectionFixtureFailure;
+                    return false;
+                }
                 const auto acceptedArgs = acceptedIt->args();
                 if (acceptedIt->prepareState)
                     acceptedIt->prepareState(state, acceptedArgs);
@@ -2469,7 +2628,13 @@ namespace
                 }
                 LoadPark("small_park_with_ferris_wheel.sv6");
                 auto& staleState = OpenRCT2::getGameState();
+                gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(staleState);
+                if (!gProjectionFixtureFailure.empty())
+                {
+                    failure = gProjectionFixtureFailure;
+                    return false;
+                }
                 const auto staleAccepted = staleCase.base == AcceptedCaseId::untyped
                     ? std::find_if(acceptedCases.begin(), acceptedCases.end(), [](const auto& accepted) {
                           return accepted.id == AcceptedCaseId::untyped;
@@ -2554,7 +2719,13 @@ namespace
             {
                 LoadPark("small_park_with_ferris_wheel.sv6");
                 auto& ordinaryState = OpenRCT2::getGameState();
+                gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(ordinaryState);
+                if (!gProjectionFixtureFailure.empty())
+                {
+                    failure = gProjectionFixtureFailure;
+                    return false;
+                }
                 const auto ordinaryArgs = acceptedCase.args();
                 if (acceptedCase.prepareState)
                     acceptedCase.prepareState(ordinaryState, ordinaryArgs);
@@ -2617,7 +2788,13 @@ namespace
 
                 LoadPark("small_park_with_ferris_wheel.sv6");
                 auto& publicState = OpenRCT2::getGameState();
+                gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(publicState);
+                if (!gProjectionFixtureFailure.empty())
+                {
+                    failure = gProjectionFixtureFailure;
+                    return false;
+                }
                 const auto publicArgs = acceptedCase.args();
                 if (acceptedCase.prepareState)
                     acceptedCase.prepareState(publicState, publicArgs);
@@ -2788,7 +2965,8 @@ TEST_F(NativeActionContractRide, RideSetVehicleDirectExecuteRejectsMissingEntryB
         auto* ride = FindFixtureRide();
         ASSERT_NE(ride, nullptr);
         ride->status = RideStatus::closed;
-        PopulateRideProjectionFixture(state, ride->id);
+        const auto populated = PopulateRideProjectionFixture(state, ride->id);
+        ASSERT_TRUE(populated.handles) << populated.failure;
         ride->subtype = kObjectEntryIndexNull;
         state.cheats.disableTrainLengthLimit = cheat;
         const json_t args{ { "ride", ride->id.ToUnderlying() }, { "type", 0 }, { "value", 1 }, { "colour", 0 } };
@@ -3068,7 +3246,8 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     auto& state = OpenRCT2::getGameState();
     auto* ride = FindFixtureRide();
     ASSERT_NE(ride, nullptr);
-    PopulateRideProjectionFixture(state, ride->id);
+    const auto populated = PopulateRideProjectionFixture(state, ride->id);
+    ASSERT_TRUE(populated.handles) << populated.failure;
     const auto projection = OpenRCT2::Testing::SerializeRideProjection(state, { { "ride", ride->id.ToUnderlying() } });
     EXPECT_TRUE(projection.contains("news"));
     EXPECT_TRUE(projection["news"].contains("recent"));
@@ -3088,8 +3267,158 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     EXPECT_EQ(projection["campaigns"][0]["ride"], ride->id.ToUnderlying());
     ASSERT_FALSE(projection["banners"].empty());
     EXPECT_EQ(projection["banners"][0]["text"], "S2 target banner");
+    EXPECT_TRUE(projection["banners"][0]["linkedToRide"]);
+    EXPECT_EQ(projection["banners"][0]["colour"], static_cast<uint8_t>(Drawing::Colour::brightRed));
+    EXPECT_EQ(projection["banners"][0]["textColour"], static_cast<uint8_t>(Drawing::TextColour::white));
+    const auto findRecord = [](const json_t& records, uint16_t id) -> const json_t* {
+        for (const auto& record : records)
+            if (record.value("id", std::numeric_limits<uint16_t>::max()) == id)
+                return &record;
+        return nullptr;
+    };
+    const auto& handles = *populated.handles;
+    const auto* linkedGuest = findRecord(projection["guests"], handles.linkedGuest.ToUnderlying());
+    ASSERT_NE(linkedGuest, nullptr);
+    EXPECT_EQ(linkedGuest->at("currentRide"), ride->id.ToUnderlying());
+    EXPECT_EQ(linkedGuest->at("queuePredecessor"), handles.queueGuest.ToUnderlying());
+    EXPECT_EQ(linkedGuest->at("queueTime"), 37);
+    EXPECT_EQ(linkedGuest->at("rejoinQueueTimeout"), 4);
+    EXPECT_EQ(linkedGuest->at("previousRideTimeout"), 8);
+    EXPECT_EQ(linkedGuest->at("timeToStand"), 73);
+    EXPECT_NE(linkedGuest->at("itemFlags"), 0);
+    ASSERT_FALSE(linkedGuest->at("thoughts").empty());
+    EXPECT_EQ(linkedGuest->at("thoughts")[0]["freshness"], 1);
+    EXPECT_EQ(linkedGuest->at("thoughts")[0]["freshTimeout"], 2);
+    const auto* head = findRecord(projection["vehicles"], handles.vehicleHead.ToUnderlying());
+    const auto* tail = findRecord(projection["vehicles"], handles.vehicleTail.ToUnderlying());
+    ASSERT_NE(head, nullptr);
+    ASSERT_NE(tail, nullptr);
+    EXPECT_EQ(head->at("trainLink"), handles.vehicleTail.ToUnderlying());
+    EXPECT_EQ(tail->at("previousRideLink"), handles.vehicleHead.ToUnderlying());
+    EXPECT_EQ(head->at("occupantCount"), 1);
+    EXPECT_EQ(tail->at("occupantCount"), 1);
+    EXPECT_EQ(projection["finance"]["cash"], 100000);
+    EXPECT_EQ(projection["finance"]["bankLoan"], 20000);
+    EXPECT_EQ(projection["finance"]["maxBankLoan"], 50000);
+    EXPECT_EQ(projection["finance"]["loanInterestRate"], 7);
+    EXPECT_EQ(projection["finance"]["expenditureTable"][0][static_cast<size_t>(ExpenditureType::rideConstruction)], 77);
+    EXPECT_EQ(projection["finance"]["valueHistory"][0], 12000);
+    EXPECT_EQ(projection["finance"]["valueHistory"][7], 11900);
+    const auto* targetRide = findRecord(projection["rides"], handles.ride.ToUnderlying());
+    ASSERT_NE(targetRide, nullptr);
+    EXPECT_EQ(targetRide->at("numStations"), ride->numStations);
+    EXPECT_TRUE(targetRide->contains("maxTrains"));
+    EXPECT_TRUE(targetRide->contains("vehicleChangeTimeout"));
+    EXPECT_TRUE(targetRide->contains("inspectionInterval"));
+    EXPECT_TRUE(targetRide->contains("fixedRatings"));
+    EXPECT_TRUE(targetRide->contains("cableLiftLoc"));
+    EXPECT_TRUE(targetRide->contains("musicPosition"));
+    EXPECT_TRUE(projection["watch"].contains("tileRoles"));
+    EXPECT_EQ(projection["watch"]["tileRoles"].size(), 4);
     EXPECT_TRUE(projection["watch"].contains("tiles"));
     EXPECT_TRUE(projection["watch"].contains("recentNewsSlots"));
+}
+
+TEST_F(NativeActionContractHarness, PopulatedProjectionIdentityAndFieldMutationsRed)
+{
+    const std::vector<std::pair<std::string, std::function<void(json_t&)>>> mutations{
+        { "linked guest", [](json_t& projection) {
+             const auto id = projection["watch"]["fixtureIds"]["linkedGuest"].get<uint16_t>();
+             auto& guests = projection["guests"];
+             guests.erase(std::remove_if(guests.begin(), guests.end(), [id](const auto& guest) {
+                               return guest.value("id", std::numeric_limits<uint16_t>::max()) == id;
+                           }),
+                          guests.end());
+         } },
+        { "tail vehicle", [](json_t& projection) {
+             const auto id = projection["watch"]["fixtureIds"]["vehicleTail"].get<uint16_t>();
+             auto& vehicles = projection["vehicles"];
+             vehicles.erase(std::remove_if(vehicles.begin(), vehicles.end(), [id](const auto& vehicle) {
+                                 return vehicle.value("id", std::numeric_limits<uint16_t>::max()) == id;
+                             }),
+                            vehicles.end());
+         } },
+        { "campaign type", [](json_t& projection) {
+             for (auto& campaign : projection["campaigns"])
+             {
+                 if (campaign.value("ride", std::numeric_limits<uint16_t>::max())
+                     == projection["watch"]["fixtureIds"]["campaignRide"].get<uint16_t>())
+                     campaign["type"] = 0;
+             }
+         } },
+        { "banner linkage", [](json_t& projection) {
+             for (auto& banner : projection["banners"])
+                 if (banner.value("id", std::numeric_limits<uint16_t>::max())
+                     == projection["watch"]["fixtureIds"]["banner"].get<uint16_t>())
+                     banner["linkedToRide"] = false;
+         } },
+        { "voucher and photo flags", [](json_t& projection) {
+             for (auto& guest : projection["guests"])
+                 if (guest.value("id", std::numeric_limits<uint16_t>::max())
+                     == projection["watch"]["fixtureIds"]["linkedGuest"].get<uint16_t>())
+                     guest["itemFlags"] = 0;
+         } },
+        { "aliased tile roles", [](json_t& projection) {
+             projection["watch"]["tileRoles"][1] = projection["watch"]["tileRoles"][0];
+         } },
+        { "unwatched removed entrance", [](json_t& projection) {
+             projection["watch"]["tileRoles"].erase(projection["watch"]["tileRoles"].begin() + 1);
+         } },
+    };
+    for (const auto& [name, mutate] : mutations)
+    {
+        auto fixture = MakeEntranceFixture();
+        const auto original = fixture.rejectionProjection;
+        fixture.rejectionProjection = [original, mutate](const GameState_t& state, const json_t& args) {
+            auto projection = original(state, args);
+            mutate(projection);
+            return projection;
+        };
+        std::string failure;
+        EXPECT_FALSE(RunFixture(fixture, failure)) << name;
+        EXPECT_FALSE(failure.empty()) << name;
+    }
+}
+
+TEST_F(NativeActionContractHarness, PopulatedProjectionRequiredFieldMutationsRed)
+{
+    const std::vector<std::string> rideFields{
+        "maxTrains", "vehicleChangeTimeout", "inspectionInterval", "fixedRatings", "cableLift", "music", "musicEnabled",
+    };
+    for (const auto& field : rideFields)
+    {
+        auto fixture = MakeEntranceFixture();
+        const auto original = fixture.rejectionProjection;
+        fixture.rejectionProjection = [original, field](const GameState_t& state, const json_t& args) {
+            auto projection = original(state, args);
+            const auto id = projection["watch"]["fixtureIds"]["ride"].get<uint16_t>();
+            for (auto& ride : projection["rides"])
+                if (ride.value("id", std::numeric_limits<uint16_t>::max()) == id)
+                    ride.erase(field);
+            return projection;
+        };
+        std::string failure;
+        EXPECT_FALSE(RunFixture(fixture, failure)) << field;
+        EXPECT_NE(failure.find("ride field is omitted"), std::string::npos) << field << ": " << failure;
+    }
+    for (const auto& [label, mutate] : std::vector<std::pair<std::string, std::function<void(json_t&)>>>{
+             { "expenditure", [](json_t& projection) {
+                  projection["finance"]["expenditureTable"][0].erase(static_cast<size_t>(ExpenditureType::rideConstruction));
+              } },
+             { "value history", [](json_t& projection) { projection["finance"]["valueHistory"].erase(0); } },
+         })
+    {
+        auto fixture = MakeEntranceFixture();
+        const auto original = fixture.rejectionProjection;
+        fixture.rejectionProjection = [original, mutate](const GameState_t& state, const json_t& args) {
+            auto projection = original(state, args);
+            mutate(projection);
+            return projection;
+        };
+        std::string failure;
+        EXPECT_FALSE(RunFixture(fixture, failure)) << label;
+        EXPECT_FALSE(failure.empty()) << label;
+    }
 }
 
 TEST(NativeActionContractHarnessMutations, CoupledArgumentKeysRed)
