@@ -50,6 +50,7 @@
 #include <openrct2/ride/RideData.h>
 #include <openrct2/ride/Vehicle.h>
 #include <openrct2/world/Banner.h>
+#include <openrct2/world/Entrance.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
 #include <openrct2/world/tile_element/EntranceElement.h>
@@ -270,6 +271,8 @@ namespace
         std::function<json_t(const GameState_t&, const json_t&)> rejectionProjection;
         std::function<json_t(const GameState_t&, const json_t&)> acceptedPostStateProjection;
         ProjectionContractSelector projectionContract;
+        // Test-only evidence corruption; RunFixture remains the sole source of truth.
+        std::function<void(const SemanticInvalidPartition&, json_t&)> mutateExecuteResponse;
         std::function<GameActions::GameAction::Ptr(const json_t&)> makeOrdinaryAction;
         ExpectedCostClass expectedCostClass = ExpectedCostClass::engineComputed;
         std::vector<std::string> transportOmissions;
@@ -559,6 +562,10 @@ namespace
                             if (!beforeValue.is_null() || !afterValue.is_object() || relation.count != 1)
                                 return false;
                             const auto expectedType = relation.isExit ? ENTRANCE_TYPE_RIDE_EXIT : ENTRANCE_TYPE_RIDE_ENTRANCE;
+                            if (!afterValue.contains("stationBaseZ") || !afterValue.contains("clearanceHeight"))
+                                return false;
+                            const auto expectedClearance = afterValue.at("stationBaseZ").get<int32_t>()
+                                + (relation.isExit ? RideExitHeight : RideEntranceHeight) / kCoordsZStep;
                             return afterValue.value("count", 0) == relation.count
                                 && afterValue.value("type", -1) == expectedType
                                 && afterValue.value("ride", -1) == args.value("ride", -2)
@@ -566,7 +573,7 @@ namespace
                                 && afterValue.value("direction", -1) == args.value("direction", -2)
                                 && afterValue.value("ghost", true) == false
                                 && afterValue.value("baseHeight", -1) == afterValue.value("stationBaseZ", -2)
-                                && afterValue.contains("clearanceHeight");
+                                && afterValue.at("clearanceHeight").get<int32_t>() == expectedClearance;
                         }
                     },
                     delta.relation);
@@ -586,6 +593,17 @@ namespace
     {
         if (!response.contains("rejection") || response["rejection"] != expectedRejection)
             return "owner result/title/message does not match the declared owner result";
+        return {};
+    }
+
+    std::string ValidateOwnerResultIdentity(const json_t& queried, const json_t& executed)
+    {
+        static constexpr std::array<std::string_view, 3> ownerResultFields{ "status", "accepted", "rejection" };
+        for (const auto field : ownerResultFields)
+        {
+            if (!queried.contains(field) || !executed.contains(field) || queried.at(field) != executed.at(field))
+                return "execute owner result does not match the prior query rejection";
+        }
         return {};
     }
 
@@ -2373,11 +2391,28 @@ namespace
                         return false;
                     }
                 }
-                const auto executed = ExecuteNativeAction(fixture.registration, args, state);
+                auto executed = ExecuteNativeAction(fixture.registration, args, state);
+                if (fixture.mutateExecuteResponse)
+                    fixture.mutateExecuteResponse(partition, executed.value);
                 if (!executed.ok || executed.value.value("accepted", true))
                 {
                     failure = "execution accepted semantic invalid partition: " + partition.parameter;
                     return false;
+                }
+                if (partition.id != InvalidCaseId::untyped)
+                {
+                    if (const auto ownerFailure = ValidateOwnerResult(executed.value, partition.expectedOwner);
+                        !ownerFailure.empty())
+                    {
+                        failure = ownerFailure + ": " + partition.caseName;
+                        return false;
+                    }
+                    if (const auto identityFailure = ValidateOwnerResultIdentity(queried.value, executed.value);
+                        !identityFailure.empty())
+                    {
+                        failure = identityFailure + ": " + partition.caseName;
+                        return false;
+                    }
                 }
                 const auto after = fixture.rejectionProjection(state, args);
                 if (before != after)
@@ -2960,6 +2995,18 @@ TEST_F(NativeActionContractHarness, WrongOwnerResultMutationReachesRunFixture)
     EXPECT_NE(failure.find("owner result"), std::string::npos);
 }
 
+TEST_F(NativeActionContractHarness, ExecuteOwnerResultMutationReachesRunFixture)
+{
+    auto fixture = MakeEntranceFixture();
+    fixture.mutateExecuteResponse = [](const SemanticInvalidPartition& partition, json_t& response) {
+        if (partition.id == InvalidCaseId::entranceXOffMap)
+            response["rejection"]["message"] = "corrupted execute response";
+    };
+    std::string failure;
+    EXPECT_FALSE(RunFixture(fixture, failure));
+    EXPECT_NE(failure.find("owner result"), std::string::npos) << failure;
+}
+
 TEST_F(NativeActionContractHarness, WrongIntegerDeltaMutationReachesRunFixture)
 {
     auto fixture = MakeEntranceFixture();
@@ -2967,6 +3014,31 @@ TEST_F(NativeActionContractHarness, WrongIntegerDeltaMutationReachesRunFixture)
     std::string failure;
     EXPECT_FALSE(RunFixture(fixture, failure));
     EXPECT_NE(failure.find("intended field delta"), std::string::npos);
+}
+
+TEST_F(NativeActionContractHarness, WrongEntranceClearanceMutationReachesRunFixture)
+{
+    for (const bool isExit : { false, true })
+    {
+        auto fixture = MakeEntranceFixture();
+        bool mutated = false;
+        const auto original = fixture.acceptedPostStateProjection;
+        fixture.acceptedPostStateProjection = [original, isExit, &mutated](const GameState_t& state, const json_t& args) {
+            auto projection = original(state, args);
+            const auto expectedType = isExit ? ENTRANCE_TYPE_RIDE_EXIT : ENTRANCE_TYPE_RIDE_ENTRANCE;
+            auto& inserted = projection["insertedElement"];
+            if (inserted.is_object() && inserted.value("type", -1) == expectedType)
+            {
+                inserted["clearanceHeight"] = inserted.at("clearanceHeight").get<int32_t>() + 1;
+                mutated = true;
+            }
+            return projection;
+        };
+        std::string failure;
+        EXPECT_FALSE(RunFixture(fixture, failure)) << "isExit=" << isExit;
+        EXPECT_TRUE(mutated) << "isExit=" << isExit;
+        EXPECT_NE(failure.find("intended field delta"), std::string::npos) << failure;
+    }
 }
 
 TEST_F(NativeActionContractHarness, OmittedAndFakeProjectionMutationsReachRunFixture)
