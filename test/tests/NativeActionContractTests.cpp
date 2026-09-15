@@ -20,10 +20,7 @@
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/actions/GameActionRunner.h>
-#include <openrct2/actions/ride/RideCreateAction.h>
-#include <openrct2/actions/track/TrackPlaceAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
-#include <openrct2/localisation/StringIds.h>
 #include <openrct2/object/Object.h>
 #include <openrct2/object/ObjectManager.h>
 #include <openrct2/ride/Ride.h>
@@ -31,7 +28,6 @@
 #include <openrct2/ride/RideData.h>
 #include <openrct2/ride/ted/TrackElemType.h>
 #include <string>
-#include <utility>
 #include <vector>
 
 using namespace OpenRCT2;
