@@ -23,8 +23,6 @@
 #include "../../windows/Intent.h"
 #include "../../world/Map.h"
 
-#include <limits>
-
 namespace OpenRCT2::GameActions
 {
     constexpr static StringId kSetVehicleTypeErrorTitle[] = {
@@ -66,7 +64,6 @@ namespace OpenRCT2::GameActions
         if (_type >= RideSetVehicleType::count)
         {
             LOG_ERROR("Invalid ride vehicle type %d", _type);
-            return Result(Status::invalidParameters, STR_RIDE_SET_VEHICLE_TYPE_FAIL, STR_ERR_VALUE_OUT_OF_RANGE);
         }
         auto errTitle = kSetVehicleTypeErrorTitle[EnumValue(_type)];
 
@@ -87,43 +84,11 @@ namespace OpenRCT2::GameActions
             return Result(Status::notClosed, errTitle, STR_MUST_BE_CLOSED_FIRST);
         }
 
-        // Execute clears construction state before applying the requested value;
-        // prove the current ride entry before any type-specific or cheat-owned
-        // branch can reach that clearing path.
-        const auto* currentRideEntry = GetRideEntryByIndex(ride->subtype);
-        if (currentRideEntry == nullptr)
-        {
-            return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
-        }
-
         switch (_type)
         {
             case RideSetVehicleType::numTrains:
-                if (_value == 0 || _value > ride->maxTrains)
-                {
-                    return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
-                }
-                break;
             case RideSetVehicleType::numCarsPerTrain:
-            {
-                // The UI deliberately exposes the extended train-length path
-                // while this cheat is enabled. Keep descriptor bounds for
-                // ordinary play, but retain the actual byte/storage and engine
-                // safety bounds when the cheat owns the wider domain.
-                const bool outsideStorageBounds = _value == 0 || _value > std::numeric_limits<uint8_t>::max();
-                const bool outsideDescriptorBounds = _value < currentRideEntry->min_cars_in_train
-                    || _value > currentRideEntry->max_cars_in_train;
-                if (outsideStorageBounds || (!gameState.cheats.disableTrainLengthLimit && outsideDescriptorBounds))
-                {
-                    return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
-                }
-                break;
-            }
             case RideSetVehicleType::trainsReversed:
-                if (_value > 1)
-                {
-                    return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
-                }
                 break;
             case RideSetVehicleType::rideEntry:
             {
@@ -165,15 +130,6 @@ namespace OpenRCT2::GameActions
         {
             LOG_ERROR("Ride not found for rideIndex %u", _rideIndex.ToUnderlying());
             return Result(Status::invalidParameters, errTitle, STR_ERR_RIDE_NOT_FOUND);
-        }
-
-        // Execute can be called directly by engine owners as well as through
-        // the synchronous dispatcher. Reject a stale/missing current entry
-        // before any branch clears vehicles, guests, seats, or queue links.
-        if (GetRideEntryByIndex(ride->subtype) == nullptr)
-        {
-            LOG_ERROR("Ride entry not found for index %d", ride->subtype);
-            return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
         }
 
         switch (_type)

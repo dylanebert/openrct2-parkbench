@@ -42,11 +42,6 @@ namespace OpenRCT2::GameActions
 
     Result RideSetVisibilityAction::Query(GameState_t& gameState, Park::ParkData& park) const
     {
-        if (GetRide(_rideIndex) == nullptr)
-        {
-            return Result(Status::invalidParameters, STR_CANT_CHANGE_THIS, STR_ERR_RIDE_NOT_FOUND);
-        }
-
         if (EnumValue(_visibility) >= 2)
         {
             LOG_ERROR("Invalid visibility type %d", _visibility);
