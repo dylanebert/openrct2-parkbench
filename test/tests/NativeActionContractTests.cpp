@@ -52,10 +52,12 @@
 #include <openrct2/world/Banner.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/tile_element/TrackElement.h>
+#include <openrct2/world/tile_element/EntranceElement.h>
 #include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 using namespace OpenRCT2;
@@ -69,11 +71,104 @@ namespace
         engineComputed,
     };
 
+    enum class AcceptedCaseId : uint16_t
+    {
+        untyped,
+        entrancePlace,
+        exitPlace,
+    };
+
+    enum class InvalidCaseId : uint16_t
+    {
+        untyped,
+        entranceXOffMap,
+        entranceYOffMap,
+        entranceDirectionOutOfRange,
+        entranceRideMissing,
+        entranceStationOutOfRange,
+        exitXOffMap,
+    };
+
+    enum class ArgumentKey : uint8_t
+    {
+        x,
+        y,
+        direction,
+        ride,
+        station,
+        isExit,
+    };
+
+    enum class OwnerResultId : uint8_t
+    {
+        untyped,
+        entranceOffMap,
+        exitOffMap,
+        entranceDirectionOutOfRange,
+        entranceRideNotFound,
+        entranceStationOutOfRange,
+        entranceNotClosed,
+    };
+
+    enum class StalePredicateId : uint8_t
+    {
+        untyped,
+        entranceNotClosed,
+    };
+
+    struct ExpectedOwnerResult
+    {
+        GameActions::Status status;
+        StringId title;
+        StringId message;
+    };
+
+    struct ArgumentAssignment
+    {
+        ArgumentKey key;
+        json_t value;
+    };
+
+    struct IntegerAdd
+    {
+        int64_t amount;
+    };
+
+    struct ReplaceLiteral
+    {
+        json_t before;
+        json_t after;
+    };
+
+    struct EndpointFromArguments
+    {
+        ArgumentKey x;
+        ArgumentKey y;
+        ArgumentKey direction;
+    };
+
+    struct InsertedEntranceElement
+    {
+        bool isExit;
+        int32_t count;
+    };
+
+    using DeltaRelation = std::variant<IntegerAdd, ReplaceLiteral, EndpointFromArguments, InsertedEntranceElement>;
+
+    struct NamedFieldDelta
+    {
+        json_t::json_pointer path;
+        DeltaRelation relation;
+
+        NamedFieldDelta(std::string path_, DeltaRelation relation_)
+            : path(std::move(path_))
+            , relation(std::move(relation_))
+        {
+        }
+    };
+
     struct SemanticInvalidPartition
     {
-        // The parameter is censused from the native descriptor at runtime. This
-        // label identifies the discriminated case (for example value/numTrains)
-        // rather than pretending that one value partition covers every branch.
         std::string parameter;
         std::function<void(json_t&)> makeInvalid;
         std::string caseName;
@@ -81,15 +176,18 @@ namespace
         std::function<void(GameState_t&, const json_t&)> prepareState;
         std::set<std::string> changedKeys;
         std::string acceptedCaseName = "legal";
-        // This is executable test-only owner evidence. A label alone is not
-        // an owner contract and is deliberately not accepted by the runner.
-        std::function<bool(const json_t&)> ownerResult;
+        InvalidCaseId id = InvalidCaseId::untyped;
+        AcceptedCaseId acceptedCaseId = AcceptedCaseId::untyped;
+        std::vector<AcceptedCaseId> acceptedDependencies;
+        std::vector<ArgumentAssignment> assignments;
+        std::set<ArgumentKey> exactChangedKeys;
+        OwnerResultId expectedOwner = OwnerResultId::untyped;
 
         SemanticInvalidPartition(
             std::string parameter_, std::function<void(json_t&)> makeInvalid_, std::string caseName_ = {},
             bool expectAccepted_ = false, std::function<void(GameState_t&, const json_t&)> prepareState_ = {},
             std::set<std::string> changedKeys_ = {}, std::string acceptedCaseName_ = "legal",
-            std::function<bool(const json_t&)> ownerResult_ = {})
+            OwnerResultId expectedOwner_ = OwnerResultId::untyped)
             : parameter(std::move(parameter_))
             , makeInvalid(std::move(makeInvalid_))
             , caseName(std::move(caseName_))
@@ -97,23 +195,15 @@ namespace
             , prepareState(std::move(prepareState_))
             , changedKeys(changedKeys_.empty() ? std::set<std::string>{ parameter } : std::move(changedKeys_))
             , acceptedCaseName(std::move(acceptedCaseName_))
-            , ownerResult(std::move(ownerResult_))
+            , expectedOwner(expectedOwner_)
         {
         }
-    };
-
-    struct NamedFieldDelta
-    {
-        std::string jsonPath;
-        // The callback must assert the exact pre/post value at jsonPath. It is
-        // allowed to encode a typed transform, but it may not fall back to a
-        // whole-projection inequality.
-        std::function<bool(const json_t& before, const json_t& after, const json_t& args)> expectedTransform;
     };
 
     struct AcceptedFixtureCase
     {
         std::string name;
+        AcceptedCaseId id = AcceptedCaseId::untyped;
         std::function<json_t()> args;
         std::function<void(GameState_t&, const json_t&)> prepareState;
         std::vector<NamedFieldDelta> namedDeltas;
@@ -135,12 +225,30 @@ namespace
         std::string name;
         std::function<void(GameState_t&, const json_t&)> mutate;
         std::string predicate;
+        StalePredicateId id = StalePredicateId::untyped;
+        AcceptedCaseId base = AcceptedCaseId::untyped;
+        OwnerResultId expectedOwner = OwnerResultId::untyped;
 
         StaleStateCase(std::string name_, std::function<void(GameState_t&, const json_t&)> mutate_, std::string predicate_ = {})
             : name(std::move(name_))
             , mutate(std::move(mutate_))
             , predicate(predicate_.empty() ? name : std::move(predicate_))
         {
+        }
+    };
+
+    struct ProjectionContractSelector
+    {
+        bool enabled = false;
+
+        explicit operator bool() const
+        {
+            return enabled;
+        }
+
+        bool operator()(const json_t& projection, std::string* failure) const
+        {
+            return OpenRCT2::Testing::ValidateRideProjectionStores(projection, failure);
         }
     };
 
@@ -157,10 +265,11 @@ namespace
         std::function<void(GameState_t&, const json_t&)> mutateRelevantState;
         std::vector<StaleStateCase> staleStateCases;
         std::set<std::string> requiredStalePredicates;
+        std::set<StalePredicateId> requiredTypedStalePredicates;
         std::vector<AcceptedFixtureCase> acceptedCases;
         std::function<json_t(const GameState_t&, const json_t&)> rejectionProjection;
         std::function<json_t(const GameState_t&, const json_t&)> acceptedPostStateProjection;
-        std::function<bool(const json_t&, std::string*)> projectionContract;
+        ProjectionContractSelector projectionContract;
         std::function<GameActions::GameAction::Ptr(const json_t&)> makeOrdinaryAction;
         ExpectedCostClass expectedCostClass = ExpectedCostClass::engineComputed;
         std::vector<std::string> transportOmissions;
@@ -326,14 +435,71 @@ namespace
         return changed == declared ? std::string{} : "semantic partition changed keys do not match declaration";
     }
 
-    std::string ValidateOwnerPredicate(const json_t& response, const std::function<bool(const json_t&)>& predicate)
+    std::string ArgumentKeyName(ArgumentKey key)
     {
-        if (!predicate)
-            return "semantic partition has no executable owner result predicate";
-        if (!response.contains("rejection") || !response["rejection"].is_object())
-            return "owner result has no structured rejection";
-        if (!predicate(response))
-            return "owner result did not satisfy its executable owner predicate";
+        switch (key)
+        {
+            case ArgumentKey::x: return "x";
+            case ArgumentKey::y: return "y";
+            case ArgumentKey::direction: return "direction";
+            case ArgumentKey::ride: return "ride";
+            case ArgumentKey::station: return "station";
+            case ArgumentKey::isExit: return "isExit";
+        }
+        return {};
+    }
+
+    const ExpectedOwnerResult* ExpectedOwnerResultFor(OwnerResultId id)
+    {
+        static const std::array<ExpectedOwnerResult, 7> results{
+            ExpectedOwnerResult{ GameActions::Status::invalidParameters, STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION,
+                                 STR_OFF_EDGE_OF_MAP },
+            ExpectedOwnerResult{ GameActions::Status::invalidParameters, STR_CANT_BUILD_MOVE_EXIT_FOR_THIS_RIDE_ATTRACTION,
+                                 STR_OFF_EDGE_OF_MAP },
+            ExpectedOwnerResult{ GameActions::Status::invalidParameters, STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION,
+                                 STR_ERR_VALUE_OUT_OF_RANGE },
+            ExpectedOwnerResult{ GameActions::Status::invalidParameters, STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION,
+                                 STR_ERR_RIDE_NOT_FOUND },
+            ExpectedOwnerResult{ GameActions::Status::invalidParameters, STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION,
+                                 STR_ERR_VALUE_OUT_OF_RANGE },
+            ExpectedOwnerResult{ GameActions::Status::notClosed, STR_CANT_BUILD_MOVE_ENTRANCE_FOR_THIS_RIDE_ATTRACTION,
+                                 STR_MUST_BE_CLOSED_FIRST },
+            ExpectedOwnerResult{ GameActions::Status::unknown, kStringIdNone, kStringIdNone },
+        };
+        if (id == OwnerResultId::untyped)
+            return nullptr;
+        const auto index = static_cast<size_t>(id) - 1;
+        return index < results.size() ? &results[index] : nullptr;
+    }
+
+    std::string ActionStatusCode(GameActions::Status status)
+    {
+        switch (status)
+        {
+            case GameActions::Status::invalidParameters: return "invalid_parameters";
+            case GameActions::Status::notClosed: return "not_closed";
+            default: return "unknown";
+        }
+    }
+
+    std::string ValidateOwnerResult(const json_t& response, OwnerResultId id)
+    {
+        const auto* expected = ExpectedOwnerResultFor(id);
+        if (expected == nullptr)
+            return "semantic partition has no runner-owned expected owner result";
+        if (!response.contains("status") || response["status"] != static_cast<uint16_t>(expected->status))
+            return "owner result status does not match runner-owned result";
+        if (!response.contains("accepted") || response["accepted"] != false)
+            return "owner result accepted flag does not match runner-owned result";
+        const auto expectedResult = GameActions::Result(expected->status, expected->title, expected->message);
+        const json_t expectedRejection{
+            { "code", ActionStatusCode(expected->status) },
+            { "title", expectedResult.getErrorTitle() },
+            { "message", expectedResult.getErrorMessage() },
+            { "detail", { { "status", static_cast<uint16_t>(expected->status) } } },
+        };
+        if (!response.contains("rejection") || response["rejection"] != expectedRejection)
+            return "owner result/title/message/detail does not match runner-owned result";
         return {};
     }
 
@@ -360,18 +526,57 @@ namespace
             return "accepted case declares no exact JSON field delta";
         for (const auto& delta : deltas)
         {
-            if (delta.jsonPath.empty() || !delta.expectedTransform)
-                return "accepted case declares an incomplete JSON field delta";
             try
             {
-                const auto& beforeValue = before.at(json_t::json_pointer(delta.jsonPath));
-                const auto& afterValue = after.at(json_t::json_pointer(delta.jsonPath));
-                if (!delta.expectedTransform(beforeValue, afterValue, args))
-                    return "accepted case did not satisfy intended field delta: " + delta.jsonPath;
+                const auto& beforeValue = before.at(delta.path);
+                const auto& afterValue = after.at(delta.path);
+                const auto argument = [&args](ArgumentKey key) -> const json_t& { return args.at(ArgumentKeyName(key)); };
+                const auto result = std::visit(
+                    [&beforeValue, &afterValue, &args, &argument](const auto& relation) -> bool {
+                        using Relation = std::decay_t<decltype(relation)>;
+                        if constexpr (std::is_same_v<Relation, IntegerAdd>)
+                        {
+                            return beforeValue.is_number_integer() && afterValue.is_number_integer()
+                                && afterValue.get<int64_t>() == beforeValue.get<int64_t>() + relation.amount;
+                        }
+                        else if constexpr (std::is_same_v<Relation, ReplaceLiteral>)
+                        {
+                            return beforeValue == relation.before && afterValue == relation.after;
+                        }
+                        else if constexpr (std::is_same_v<Relation, EndpointFromArguments>)
+                        {
+                            if (!beforeValue.is_null() || !afterValue.is_object())
+                                return false;
+                            return afterValue.value("x", std::numeric_limits<int32_t>::min())
+                                    == argument(relation.x).template get<int32_t>() / kCoordsXYStep
+                                && afterValue.value("y", std::numeric_limits<int32_t>::min())
+                                    == argument(relation.y).template get<int32_t>() / kCoordsXYStep
+                                && afterValue.value("direction", 255) == argument(relation.direction).template get<uint8_t>()
+                                && afterValue.contains("z") && afterValue.value("z", -1) == afterValue.value("stationBaseZ", -2);
+                        }
+                        else if constexpr (std::is_same_v<Relation, InsertedEntranceElement>)
+                        {
+                            if (!beforeValue.is_null() || !afterValue.is_object() || relation.count != 1)
+                                return false;
+                            const auto expectedType = relation.isExit ? ENTRANCE_TYPE_RIDE_EXIT : ENTRANCE_TYPE_RIDE_ENTRANCE;
+                            return afterValue.value("count", 0) == relation.count
+                                && afterValue.value("type", -1) == expectedType
+                                && afterValue.value("ride", -1) == args.value("ride", -2)
+                                && afterValue.value("station", -1) == args.value("station", -2)
+                                && afterValue.value("direction", -1) == args.value("direction", -2)
+                                && afterValue.value("ghost", true) == false
+                                && afterValue.value("baseHeight", -1) == afterValue.value("stationBaseZ", -2)
+                                && afterValue.contains("clearanceHeight");
+                        }
+                    },
+                    delta.relation);
+                if (!result)
+                    return "accepted case did not satisfy intended field delta: " + delta.path.to_string()
+                        + " before=" + beforeValue.dump() + " after=" + afterValue.dump() + " args=" + args.dump();
             }
             catch (const std::exception&)
             {
-                return "accepted case is missing intended JSON path: " + delta.jsonPath;
+                return "accepted case is missing intended JSON path: " + delta.path.to_string();
             }
         }
         return {};
@@ -1661,17 +1866,7 @@ namespace
                 if (fixture.acceptedCases.empty())
                     fixture.acceptedCases.push_back({ "legal", fixture.legalArgs, {} });
                 for (auto& partition : fixture.semanticInvalidPartitions)
-                {
                     partition.acceptedCaseName = "legal";
-                    if (!partition.ownerResult)
-                    {
-                        partition.ownerResult = [](const json_t& response) {
-                            const auto& rejection = response.at("rejection");
-                            return rejection.contains("code") && rejection.contains("title")
-                                && rejection.contains("message") && rejection.contains("detail");
-                        };
-                    }
-                }
                 fixture.requiredStalePredicates = RequiredStalePredicates(fixture.registration);
             }
             return fixtures;
@@ -1681,12 +1876,13 @@ namespace
         {
             NativeActionFixture fixture;
             const auto legalArgs = std::make_shared<json_t>();
+            const auto exitArgs = std::make_shared<json_t>();
             fixture.registration = "RideEntranceExitPlaceAction";
             fixture.ownerFamily = "station-track-maze";
             fixture.publicUse = "paused monitor construction of a ride entrance";
             fixture.untrustedParameters = { "x", "y", "direction", "ride", "station", "isExit" };
             fixture.transportOmissions = { "queue", "network", "replay", "action-log", "autosave", "ui" };
-            fixture.prepareLegalState = [legalArgs](GameState_t& state) {
+            fixture.prepareLegalState = [legalArgs, exitArgs](GameState_t& state) {
                 state.cheats.disableClearanceChecks = true;
                 state.cheats.sandboxMode = true;
                 auto* ride = FindRideWithEntranceAndTrack();
@@ -1694,45 +1890,92 @@ namespace
                     return;
                 ride->status = RideStatus::closed;
                 const auto station = StationIndex::FromUnderlying(0);
-                const auto endpoint = ride->getStation(station).Entrance;
-                if (endpoint.IsNull())
+                const auto entrance = ride->getStation(station).Entrance;
+                const auto exit = ride->getStation(station).Exit;
+                if (entrance.IsNull() || exit.IsNull())
                     return;
                 *legalArgs = {
-                    { "x", endpoint.ToCoordsXY().x },
-                    { "y", endpoint.ToCoordsXY().y },
-                    { "direction", static_cast<uint8_t>(endpoint.direction) },
+                    { "x", entrance.ToCoordsXY().x },
+                    { "y", entrance.ToCoordsXY().y },
+                    { "direction", static_cast<uint8_t>(entrance.direction) },
                     { "ride", ride->id.ToUnderlying() },
                     { "station", 0 },
                     { "isExit", false },
                 };
-                auto remove = GameActions::RideEntranceExitRemoveAction(endpoint.ToCoordsXY(), ride->id, station, false);
-                remove.SetFlags(
-                    {
-                        GameActions::CommandFlag::apply,
-                        GameActions::CommandFlag::allowDuringPaused,
-                        GameActions::CommandFlag::noSpend,
-                    });
-                ExecuteSetupAction(remove, state);
+                *exitArgs = {
+                    { "x", exit.ToCoordsXY().x },
+                    { "y", exit.ToCoordsXY().y },
+                    { "direction", static_cast<uint8_t>(exit.direction) },
+                    { "ride", ride->id.ToUnderlying() },
+                    { "station", 0 },
+                    { "isExit", true },
+                };
                 PopulateRideProjectionFixture(state, ride->id);
             };
             fixture.legalArgs = [legalArgs] { return *legalArgs; };
-            fixture.semanticInvalidPartitions = {
-                { "x", [](json_t& args) { args["x"] = -1; } },
-                { "y", [](json_t& args) { args["y"] = -1; } },
-                { "direction", [](json_t& args) { args["direction"] = 4; } },
-                { "ride", [](json_t& args) { args["ride"] = 65535; } },
-                { "station", [](json_t& args) { args["station"] = 255; } },
-                { "isExit",
-                  [](json_t& args) {
-                      args["isExit"] = true;
-                      args["x"] = -1;
-                      args["y"] = -1;
-                  },
-                  "is-exit",
-                  false,
-                  {},
-                  { "isExit", "x", "y" } },
+            const auto removeEndpoint = [](GameState_t& state, const json_t& args) {
+                const auto rideId = RideId::FromUnderlying(args.at("ride").get<uint16_t>());
+                const auto station = StationIndex::FromUnderlying(args.at("station").get<uint8_t>());
+                GameActions::RideEntranceExitRemoveAction remove(
+                    CoordsXY{ args.at("x").get<int32_t>(), args.at("y").get<int32_t>() }, rideId, station,
+                    args.at("isExit").get<bool>());
+                remove.SetFlags(
+                    { GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused,
+                      GameActions::CommandFlag::noSpend });
+                if (!ExecuteSetupAction(remove, state))
+                    return;
+                if (auto* ride = GetRide(rideId); ride != nullptr)
+                {
+                    auto& stationData = ride->getStation(station);
+                    stationData.LastPeepInQueue = EntityId::FromUnderlying(1);
+                    stationData.QueueLength = 37;
+                    stationData.QueueTime = 19;
+                }
             };
+            fixture.semanticInvalidPartitions = {
+                { "x", {}, "entranceXOffMap" },
+                { "y", {}, "entranceYOffMap" },
+                { "direction", {}, "entranceDirectionOutOfRange" },
+                { "ride", {}, "entranceRideMissing" },
+                { "station", {}, "entranceStationOutOfRange" },
+                { "x", {}, "exitXOffMap" },
+            };
+            fixture.semanticInvalidPartitions[0].id = InvalidCaseId::entranceXOffMap;
+            fixture.semanticInvalidPartitions[0].acceptedCaseId = AcceptedCaseId::entrancePlace;
+            fixture.semanticInvalidPartitions[0].acceptedDependencies = { AcceptedCaseId::entrancePlace };
+            fixture.semanticInvalidPartitions[0].assignments = { { ArgumentKey::x, -1 } };
+            fixture.semanticInvalidPartitions[0].exactChangedKeys = { ArgumentKey::x };
+            fixture.semanticInvalidPartitions[0].expectedOwner = OwnerResultId::entranceOffMap;
+            fixture.semanticInvalidPartitions[1].id = InvalidCaseId::entranceYOffMap;
+            fixture.semanticInvalidPartitions[1].acceptedCaseId = AcceptedCaseId::entrancePlace;
+            fixture.semanticInvalidPartitions[1].acceptedDependencies = { AcceptedCaseId::entrancePlace };
+            fixture.semanticInvalidPartitions[1].assignments = { { ArgumentKey::y, -1 } };
+            fixture.semanticInvalidPartitions[1].exactChangedKeys = { ArgumentKey::y };
+            fixture.semanticInvalidPartitions[1].expectedOwner = OwnerResultId::entranceOffMap;
+            fixture.semanticInvalidPartitions[2].id = InvalidCaseId::entranceDirectionOutOfRange;
+            fixture.semanticInvalidPartitions[2].acceptedCaseId = AcceptedCaseId::entrancePlace;
+            fixture.semanticInvalidPartitions[2].acceptedDependencies = { AcceptedCaseId::entrancePlace };
+            fixture.semanticInvalidPartitions[2].assignments = { { ArgumentKey::direction, 4 } };
+            fixture.semanticInvalidPartitions[2].exactChangedKeys = { ArgumentKey::direction };
+            fixture.semanticInvalidPartitions[2].expectedOwner = OwnerResultId::entranceDirectionOutOfRange;
+            fixture.semanticInvalidPartitions[3].id = InvalidCaseId::entranceRideMissing;
+            fixture.semanticInvalidPartitions[3].acceptedCaseId = AcceptedCaseId::entrancePlace;
+            fixture.semanticInvalidPartitions[3].acceptedDependencies = { AcceptedCaseId::entrancePlace };
+            fixture.semanticInvalidPartitions[3].assignments = { { ArgumentKey::ride, 65535 } };
+            fixture.semanticInvalidPartitions[3].exactChangedKeys = { ArgumentKey::ride };
+            fixture.semanticInvalidPartitions[3].expectedOwner = OwnerResultId::entranceRideNotFound;
+            fixture.semanticInvalidPartitions[4].id = InvalidCaseId::entranceStationOutOfRange;
+            fixture.semanticInvalidPartitions[4].acceptedCaseId = AcceptedCaseId::entrancePlace;
+            fixture.semanticInvalidPartitions[4].acceptedDependencies = { AcceptedCaseId::entrancePlace };
+            fixture.semanticInvalidPartitions[4].assignments = { { ArgumentKey::station, 255 } };
+            fixture.semanticInvalidPartitions[4].exactChangedKeys = { ArgumentKey::station };
+            fixture.semanticInvalidPartitions[4].expectedOwner = OwnerResultId::entranceStationOutOfRange;
+            fixture.semanticInvalidPartitions[5].id = InvalidCaseId::exitXOffMap;
+            fixture.semanticInvalidPartitions[5].acceptedCaseId = AcceptedCaseId::exitPlace;
+            fixture.semanticInvalidPartitions[5].acceptedDependencies = { AcceptedCaseId::exitPlace };
+            fixture.semanticInvalidPartitions[5].assignments = { { ArgumentKey::x, -1 } };
+            fixture.semanticInvalidPartitions[5].exactChangedKeys = { ArgumentKey::x };
+            fixture.semanticInvalidPartitions[5].expectedOwner = OwnerResultId::exitOffMap;
             fixture.mutateRelevantState = [](GameState_t&, const json_t& args) {
                 const auto rideValue = args.value("ride", -1);
                 if (rideValue >= 0 && rideValue < Limits::kMaxRidesInPark)
@@ -1741,7 +1984,64 @@ namespace
                         ride->status = RideStatus::open;
                 }
             };
-            fixture.rejectionProjection = [](const GameState_t& state, const json_t& args) {
+            fixture.staleStateCases = {
+                { "entranceNotClosed",
+                  [](GameState_t&, const json_t& args) {
+                      if (auto* ride = GetRide(RideId::FromUnderlying(args.at("ride").get<uint16_t>())); ride != nullptr)
+                          ride->status = RideStatus::open;
+                  } },
+            };
+            fixture.staleStateCases.front().id = StalePredicateId::entranceNotClosed;
+            fixture.staleStateCases.front().base = AcceptedCaseId::entrancePlace;
+            fixture.staleStateCases.front().expectedOwner = OwnerResultId::entranceNotClosed;
+            fixture.requiredTypedStalePredicates = { StalePredicateId::entranceNotClosed };
+            fixture.requiredStalePredicates.clear();
+            const auto addPlacementProjection = [](json_t& projection, const GameState_t& state, const json_t& args) {
+                const auto rideValue = args.value("ride", -1);
+                const auto stationValue = args.value("station", 0);
+                if (rideValue < 0 || static_cast<size_t>(rideValue) >= state.rides.size()
+                    || stationValue < 0 || stationValue >= Limits::kMaxStationsPerRide)
+                    return;
+                const auto& station = state.rides[static_cast<size_t>(rideValue)].getStation(
+                    StationIndex::FromUnderlying(stationValue));
+                const auto endpoint = args.value("isExit", false) ? station.Exit : station.Entrance;
+                projection["endpoint"] = endpoint.IsNull() ? json_t(nullptr) : json_t{
+                    { "x", endpoint.x }, { "y", endpoint.y }, { "z", endpoint.z },
+                    { "direction", endpoint.direction }, { "stationBaseZ", station.GetBaseZ() / kCoordsZStep },
+                };
+                projection["stationBaseZ"] = station.GetBaseZ() / kCoordsZStep;
+                projection["queueLastPeep"] = station.LastPeepInQueue.IsNull()
+                    ? json_t(nullptr) : json_t(station.LastPeepInQueue.ToUnderlying());
+                projection["queueLength"] = station.QueueLength;
+                projection["insertedElement"] = nullptr;
+                const auto tile = TileCoordsXY{ args.value("x", 0) / kCoordsXYStep, args.value("y", 0) / kCoordsXYStep };
+                auto* element = MapGetFirstElementAt(tile);
+                if (element == nullptr)
+                    return;
+                while (true)
+                {
+                    if (const auto* entrance = element->asEntrance(); entrance != nullptr
+                        && entrance->GetRideIndex().ToUnderlying() == rideValue
+                        && entrance->GetStationIndex().ToUnderlying() == stationValue
+                        && entrance->GetEntranceType()
+                            == (args.value("isExit", false) ? ENTRANCE_TYPE_RIDE_EXIT : ENTRANCE_TYPE_RIDE_ENTRANCE))
+                    {
+                        projection["insertedElement"] = {
+                            { "count", 1 }, { "type", entrance->GetEntranceType() },
+                            { "ride", entrance->GetRideIndex().ToUnderlying() },
+                            { "station", entrance->GetStationIndex().ToUnderlying() },
+                            { "direction", static_cast<uint8_t>(entrance->getDirection()) },
+                            { "baseHeight", element->baseHeight }, { "clearanceHeight", element->clearanceHeight },
+                            { "stationBaseZ", station.GetBaseZ() / kCoordsZStep }, { "ghost", element->isGhost() },
+                        };
+                        break;
+                    }
+                    if (element->isLastForTile())
+                        break;
+                    ++element;
+                }
+            };
+            fixture.rejectionProjection = [addPlacementProjection](const GameState_t& state, const json_t& args) {
                 const auto rideValue = args.value("ride", -1);
                 json_t projection = OpenRCT2::Testing::SerializeRideProjection(state, args);
                 projection["cash"] = state.park.cash;
@@ -1761,9 +2061,10 @@ namespace
                                                                              { "direction", station.Entrance.direction },
                                                                          };
                 }
+                addPlacementProjection(projection, state, args);
                 return projection;
             };
-            fixture.acceptedPostStateProjection = [](const GameState_t& state, const json_t& args) {
+            fixture.acceptedPostStateProjection = [addPlacementProjection](const GameState_t& state, const json_t& args) {
                 const auto rideValue = args.value("ride", -1);
                 json_t projection = OpenRCT2::Testing::SerializeRideProjection(state, args);
                 projection["tileElements"] = TileElementCount({ args.value("x", 0), args.value("y", 0) });
@@ -1781,6 +2082,7 @@ namespace
                                                                              { "direction", station.Entrance.direction },
                                                                          };
                 }
+                addPlacementProjection(projection, state, args);
                 return projection;
             };
             fixture.makeOrdinaryAction = [](const json_t& args) {
@@ -1793,26 +2095,27 @@ namespace
             fixture.acceptedCases = {
                 { "place-entrance",
                   fixture.legalArgs,
-                  {},
-                  { { "/tileElements",
-                      [](const json_t& before, const json_t& after, const json_t&) {
-                          return before.is_number_integer() && after.is_number_integer()
-                              && after.get<int64_t>() > before.get<int64_t>();
-                      } } } },
+                  [removeEndpoint](GameState_t& state, const json_t& args) { removeEndpoint(state, args); },
+                  { { "/tileElements", IntegerAdd{ 1 } },
+                    { "/endpoint", EndpointFromArguments{ ArgumentKey::x, ArgumentKey::y, ArgumentKey::direction } },
+                    { "/insertedElement", InsertedEntranceElement{ false, 1 } },
+                    { "/queueLastPeep", ReplaceLiteral{ json_t(1), json_t(nullptr) } },
+                    { "/queueLength", ReplaceLiteral{ json_t(37), json_t(0) } } } },
+                { "place-exit",
+                  [exitArgs] { return *exitArgs; },
+                  [removeEndpoint](GameState_t& state, const json_t& args) { removeEndpoint(state, args); },
+                  { { "/tileElements", IntegerAdd{ 1 } },
+                    { "/endpoint", EndpointFromArguments{ ArgumentKey::x, ArgumentKey::y, ArgumentKey::direction } },
+                    { "/insertedElement", InsertedEntranceElement{ true, 1 } } } },
             };
+            fixture.acceptedCases[0].id = AcceptedCaseId::entrancePlace;
+            fixture.acceptedCases[1].id = AcceptedCaseId::exitPlace;
             for (auto& partition : fixture.semanticInvalidPartitions)
             {
                 partition.acceptedCaseName = "place-entrance";
-                partition.ownerResult = [](const json_t& response) {
-                    const auto& rejection = response.at("rejection");
-                    return rejection.contains("code") && rejection.contains("title") && rejection.contains("message")
-                        && rejection.contains("detail");
-                };
             }
-            fixture.projectionContract = [](const json_t& projection, std::string* failure) {
-                return OpenRCT2::Testing::ValidateRideProjectionStores(projection, failure);
-            };
-            fixture.requiredStalePredicates = RequiredStalePredicates(fixture.registration);
+            fixture.projectionContract.enabled = true;
+            fixture.requiredStalePredicates.clear();
             return fixture;
         }
 
@@ -1850,6 +2153,17 @@ namespace
                 return false;
             }
             const auto& parameters = descriptorParameters;
+            std::vector<AcceptedFixtureCase> acceptedCases = fixture.acceptedCases;
+            if (acceptedCases.empty())
+                acceptedCases.push_back({ "legal", fixture.legalArgs, {} });
+            if (fixture.registration == "RideEntranceExitPlaceAction"
+                && std::none_of(acceptedCases.begin(), acceptedCases.end(), [](const auto& accepted) {
+                       return accepted.id == AcceptedCaseId::exitPlace;
+                   }))
+            {
+                failure = "typed entrance runner has no accepted exit branch";
+                return false;
+            }
             std::set<std::string> partitions;
             std::set<std::string> partitionCases;
             size_t partitionIndex = 0;
@@ -1879,6 +2193,10 @@ namespace
             {
                 if (!partitions.contains(parameter))
                 {
+                    // isExit is a closed boolean domain. Its false/true
+                    // branches are accepted cases, not an invalid partition.
+                    if (fixture.registration == "RideEntranceExitPlaceAction" && parameter == "isExit")
+                        continue;
                     failure = "uncovered semantic parameter: " + parameter;
                     return false;
                 }
@@ -1891,13 +2209,12 @@ namespace
 
             // Every invalid partition names and first proves an accepted
             // branch. Invalid arguments are derived only from that branch.
-            std::vector<AcceptedFixtureCase> acceptedCases = fixture.acceptedCases;
-            if (acceptedCases.empty())
-                acceptedCases.push_back({ "legal", fixture.legalArgs, {} });
             for (const auto& partition : fixture.semanticInvalidPartitions)
             {
                 const auto acceptedIt = std::find_if(
                     acceptedCases.begin(), acceptedCases.end(), [&](const auto& accepted) {
+                        if (partition.acceptedCaseId != AcceptedCaseId::untyped)
+                            return accepted.id == partition.acceptedCaseId;
                         return accepted.name == partition.acceptedCaseName;
                     });
                 if (acceptedIt == acceptedCases.end())
@@ -1916,20 +2233,93 @@ namespace
                     failure = "accepted fixture case has empty args: " + acceptedIt->name;
                     return false;
                 }
-                const auto acceptedQuery = QueryNativeAction(fixture.registration, acceptedArgs, state);
-                if (!acceptedQuery.ok || !acceptedQuery.value.value("accepted", false))
+                if (partition.id != InvalidCaseId::untyped)
                 {
-                    failure = "named accepted fixture case did not prove before invalid mutation: " + acceptedIt->name;
-                    return false;
+                    if (partition.acceptedDependencies.empty())
+                    {
+                        failure = "typed invalid case has no accepted dependencies: " + partition.caseName;
+                        return false;
+                    }
+                    for (const auto dependency : partition.acceptedDependencies)
+                    {
+                        const auto dependencyIt = std::find_if(
+                            acceptedCases.begin(), acceptedCases.end(), [dependency](const auto& accepted) {
+                                return accepted.id == dependency;
+                            });
+                        if (dependencyIt == acceptedCases.end())
+                        {
+                            failure = "typed invalid case names a missing accepted dependency: " + partition.caseName;
+                            return false;
+                        }
+                        const auto dependencyArgs = dependencyIt->args();
+                        if (dependencyArgs.empty())
+                        {
+                            failure = "accepted dependency has empty args: " + dependencyIt->name;
+                            return false;
+                        }
+                        const auto dependencyQuery = QueryNativeAction(fixture.registration, dependencyArgs, state);
+                        if (!dependencyQuery.ok || !dependencyQuery.value.value("accepted", false))
+                        {
+                            failure = "accepted dependency did not prove before invalid mutation: " + dependencyIt->name;
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    const auto acceptedQuery = QueryNativeAction(fixture.registration, acceptedArgs, state);
+                    if (!acceptedQuery.ok || !acceptedQuery.value.value("accepted", false))
+                    {
+                        failure = "named accepted fixture case did not prove before invalid mutation: " + acceptedIt->name;
+                        return false;
+                    }
                 }
                 const auto acceptedWatch = OpenRCT2::Testing::CaptureRideProjectionWatchSet(state, acceptedArgs);
                 auto args = acceptedArgs;
-                partition.makeInvalid(args);
-                if (const auto changedKeyFailure = ValidateChangedKeys(acceptedArgs, args, partition.changedKeys);
-                    !changedKeyFailure.empty())
+                if (partition.id != InvalidCaseId::untyped)
                 {
-                    failure = changedKeyFailure + ": " + partition.caseName;
-                    return false;
+                    for (const auto& assignment : partition.assignments)
+                        args[ArgumentKeyName(assignment.key)] = assignment.value;
+                    std::set<ArgumentKey> changedKeys;
+                    for (const auto& [key, value] : acceptedArgs.items())
+                    {
+                        if (!args.contains(key) || args.at(key) != value)
+                        {
+                            for (const auto candidate : { ArgumentKey::x, ArgumentKey::y, ArgumentKey::direction,
+                                                          ArgumentKey::ride, ArgumentKey::station, ArgumentKey::isExit })
+                            {
+                                if (ArgumentKeyName(candidate) == key)
+                                    changedKeys.insert(candidate);
+                            }
+                        }
+                    }
+                    for (const auto& [key, value] : args.items())
+                    {
+                        if (!acceptedArgs.contains(key) || acceptedArgs.at(key) != value)
+                        {
+                            for (const auto candidate : { ArgumentKey::x, ArgumentKey::y, ArgumentKey::direction,
+                                                          ArgumentKey::ride, ArgumentKey::station, ArgumentKey::isExit })
+                            {
+                                if (ArgumentKeyName(candidate) == key)
+                                    changedKeys.insert(candidate);
+                            }
+                        }
+                    }
+                    if (changedKeys != partition.exactChangedKeys)
+                    {
+                        failure = "typed semantic partition changed keys do not match declaration: " + partition.caseName;
+                        return false;
+                    }
+                }
+                else
+                {
+                    partition.makeInvalid(args);
+                    if (const auto changedKeyFailure = ValidateChangedKeys(acceptedArgs, args, partition.changedKeys);
+                        !changedKeyFailure.empty())
+                    {
+                        failure = changedKeyFailure + ": " + partition.caseName;
+                        return false;
+                    }
                 }
                 if (partition.prepareState)
                     partition.prepareState(state, args);
@@ -1954,9 +2344,17 @@ namespace
                     failure = "semantic invalid partition was accepted: " + partition.caseName;
                     return false;
                 }
-                if (const auto ownerFailure = ValidateOwnerPredicate(queried.value, partition.ownerResult); !ownerFailure.empty())
+                if (partition.id != InvalidCaseId::untyped)
                 {
-                    failure = ownerFailure + ": " + partition.caseName;
+                    if (const auto ownerFailure = ValidateOwnerResult(queried.value, partition.expectedOwner); !ownerFailure.empty())
+                    {
+                        failure = ownerFailure + ": " + partition.caseName;
+                        return false;
+                    }
+                }
+                else if (!queried.value.contains("rejection") || !queried.value["rejection"].is_object())
+                {
+                    failure = "untyped semantic partition has no structured rejection: " + partition.caseName;
                     return false;
                 }
                 OpenRCT2::Testing::SetRideProjectionWatchSet(acceptedWatch);
@@ -2006,25 +2404,52 @@ namespace
             std::vector<StaleStateCase> staleCases = fixture.staleStateCases;
             if (staleCases.empty())
                 staleCases.push_back({ "default-owner-state", fixture.mutateRelevantState, "default-owner-state" });
-            if (fixture.requiredStalePredicates.empty())
+            if (fixture.requiredStalePredicates.empty() && fixture.requiredTypedStalePredicates.empty())
             {
                 failure = "required stale-predicate census is empty";
                 return false;
             }
             std::set<std::string> executedStalePredicates;
+            std::set<StalePredicateId> executedTypedStalePredicates;
             for (const auto& staleCase : staleCases)
             {
                 const auto predicate = staleCase.predicate.empty() ? staleCase.name : staleCase.predicate;
-                if (!fixture.requiredStalePredicates.contains(predicate))
+                if (staleCase.id != StalePredicateId::untyped)
                 {
-                    failure = "stale witness is not in required predicate census: " + predicate;
-                    return false;
+                    if (!fixture.requiredTypedStalePredicates.contains(staleCase.id))
+                    {
+                        failure = "typed stale witness is not in required predicate census: " + staleCase.name;
+                        return false;
+                    }
+                    executedTypedStalePredicates.insert(staleCase.id);
                 }
-                executedStalePredicates.insert(predicate);
+                else
+                {
+                    if (!fixture.requiredStalePredicates.contains(predicate))
+                    {
+                        failure = "stale witness is not in required predicate census: " + predicate;
+                        return false;
+                    }
+                    executedStalePredicates.insert(predicate);
+                }
                 LoadPark("small_park_with_ferris_wheel.sv6");
                 auto& staleState = OpenRCT2::getGameState();
                 fixture.prepareLegalState(staleState);
-                const auto staleArgs = fixture.legalArgs();
+                const auto staleAccepted = staleCase.base == AcceptedCaseId::untyped
+                    ? std::find_if(acceptedCases.begin(), acceptedCases.end(), [](const auto& accepted) {
+                          return accepted.id == AcceptedCaseId::untyped;
+                      })
+                    : std::find_if(acceptedCases.begin(), acceptedCases.end(), [&](const auto& accepted) {
+                          return accepted.id == staleCase.base;
+                      });
+                if (staleAccepted == acceptedCases.end())
+                {
+                    failure = "stale witness names a missing accepted case: " + staleCase.name;
+                    return false;
+                }
+                const auto staleArgs = staleAccepted->args();
+                if (staleAccepted->prepareState)
+                    staleAccepted->prepareState(staleState, staleArgs);
                 const auto staleQuery = QueryNativeAction(fixture.registration, staleArgs, staleState);
                 if (!staleQuery.ok || !staleQuery.value.value("accepted", false))
                 {
@@ -2051,6 +2476,15 @@ namespace
                     failure = "execution did not perform a fresh query after stale-state mutation: " + staleCase.name;
                     return false;
                 }
+                if (staleCase.id != StalePredicateId::untyped)
+                {
+                    if (const auto ownerFailure = ValidateOwnerResult(staleExecution.value, staleCase.expectedOwner);
+                        !ownerFailure.empty())
+                    {
+                        failure = ownerFailure + ": " + staleCase.name;
+                        return false;
+                    }
+                }
                 const auto staleAfter = fixture.rejectionProjection(staleState, staleArgs);
                 if (staleBefore.empty() || staleBefore != staleAfter)
                 {
@@ -2067,9 +2501,14 @@ namespace
                     }
                 }
             }
-            if (executedStalePredicates != fixture.requiredStalePredicates)
+            if (executedStalePredicates != fixture.requiredStalePredicates
+                || executedTypedStalePredicates != fixture.requiredTypedStalePredicates)
             {
-                failure = "executed stale-predicate set differs from required census";
+                failure = "executed stale-predicate set differs from required census (executed="
+                    + std::to_string(executedTypedStalePredicates.size()) + ", required="
+                    + std::to_string(fixture.requiredTypedStalePredicates.size()) + ", executed legacy="
+                    + std::to_string(executedStalePredicates.size()) + ", required legacy="
+                    + std::to_string(fixture.requiredStalePredicates.size()) + ")";
                 return false;
             }
 
@@ -2409,6 +2848,17 @@ TEST_F(NativeActionContractHarness, RetainedEntranceFixtureConforms)
     ASSERT_TRUE(RunFixture(fixture, failure)) << failure;
 }
 
+class NativeActionContractTypedRunner : public NativeActionContractHarness
+{
+};
+
+TEST_F(NativeActionContractTypedRunner, RetainedEntranceTypedFixtureConforms)
+{
+    const auto fixture = MakeEntranceFixture();
+    std::string failure;
+    ASSERT_TRUE(RunFixture(fixture, failure)) << failure;
+}
+
 TEST(NativeActionContractHarnessMutations, CachedQueryMutationRed)
 {
     auto observation = HarnessObservation{};
@@ -2476,27 +2926,44 @@ TEST(NativeActionContractHarnessMutations, DescriptorCensusRed)
 TEST_F(NativeActionContractHarness, CoupledPartitionMutationReachesRunFixture)
 {
     auto fixture = MakeEntranceFixture();
-    fixture.semanticInvalidPartitions.back().changedKeys = { "isExit" };
+    fixture.semanticInvalidPartitions.front().assignments.push_back({ ArgumentKey::y, -1 });
     std::string failure;
     EXPECT_FALSE(RunFixture(fixture, failure));
     EXPECT_NE(failure.find("changed keys"), std::string::npos);
 }
 
-TEST_F(NativeActionContractHarness, WrongOwnerPredicateMutationReachesRunFixture)
+TEST_F(NativeActionContractHarness, MissingAcceptedExitDependencyReachesRunFixture)
 {
     auto fixture = MakeEntranceFixture();
-    for (auto& partition : fixture.semanticInvalidPartitions)
-        partition.ownerResult = [](const json_t&) { return false; };
+    fixture.acceptedCases.erase(fixture.acceptedCases.begin() + 1);
+    std::string failure;
+    EXPECT_FALSE(RunFixture(fixture, failure));
+    EXPECT_TRUE(failure.find("accepted fixture case") != std::string::npos
+        || failure.find("accepted exit branch") != std::string::npos) << failure;
+}
+
+TEST_F(NativeActionContractHarness, RemovedRequiredNotClosedWitnessReachesRunFixture)
+{
+    auto fixture = MakeEntranceFixture();
+    fixture.staleStateCases.clear();
+    std::string failure;
+    EXPECT_FALSE(RunFixture(fixture, failure));
+    EXPECT_NE(failure.find("stale"), std::string::npos) << failure;
+}
+
+TEST_F(NativeActionContractHarness, WrongOwnerResultMutationReachesRunFixture)
+{
+    auto fixture = MakeEntranceFixture();
+    fixture.semanticInvalidPartitions.front().expectedOwner = OwnerResultId::entranceNotClosed;
     std::string failure;
     EXPECT_FALSE(RunFixture(fixture, failure));
     EXPECT_NE(failure.find("owner result"), std::string::npos);
 }
 
-TEST_F(NativeActionContractHarness, AcceptedNoOpMutationReachesRunFixture)
+TEST_F(NativeActionContractHarness, WrongIntegerDeltaMutationReachesRunFixture)
 {
     auto fixture = MakeEntranceFixture();
-    fixture.acceptedCases.front().namedDeltas.front().expectedTransform =
-        [](const json_t&, const json_t&, const json_t&) { return false; };
+    fixture.acceptedCases.front().namedDeltas.front().relation = IntegerAdd{ 2 };
     std::string failure;
     EXPECT_FALSE(RunFixture(fixture, failure));
     EXPECT_NE(failure.find("intended field delta"), std::string::npos);
@@ -2616,7 +3083,7 @@ TEST(NativeActionContractHarnessMutations, FakeProjectionStoreRed)
 TEST(NativeActionContractHarnessMutations, AcceptedNoOpRed)
 {
     const std::vector<NamedFieldDelta> deltas{
-        { "/ride", [](const json_t& before, const json_t& after, const json_t&) { return before != after; } },
+        { "/ride", ReplaceLiteral{ json_t(1), json_t(2) } },
     };
     const auto failure = ValidateNamedDelta({ { "ride", 1 } }, { { "ride", 1 } }, json_t::object(), deltas);
     EXPECT_NE(failure.find("intended field delta"), std::string::npos);
