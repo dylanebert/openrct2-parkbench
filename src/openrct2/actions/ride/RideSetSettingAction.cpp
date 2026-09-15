@@ -70,7 +70,7 @@ namespace OpenRCT2::GameActions
                     return Result(Status::disallowed, STR_CANT_CHANGE_OPERATING_MODE, STR_MUST_BE_CLOSED_FIRST);
                 }
 
-                if (_value >= 64 || (!RideIsModeValid(*ride) && !gameState.cheats.showAllOperatingModes))
+                if (!RideIsModeValid(*ride) && !gameState.cheats.showAllOperatingModes)
                 {
                     LOG_ERROR("Invalid ride mode: %u", _value);
                     return Result(Status::invalidParameters, STR_CANT_CHANGE_OPERATING_MODE, STR_ERR_VALUE_OUT_OF_RANGE);
@@ -107,11 +107,6 @@ namespace OpenRCT2::GameActions
                 }
                 break;
             case RideSetSetting::music:
-                if (_value > 1)
-                {
-                    LOG_ERROR("Invalid music setting: %u", _value);
-                    return Result(Status::invalidParameters, STR_CANT_CHANGE_OPERATING_MODE, STR_ERR_VALUE_OUT_OF_RANGE);
-                }
                 break;
             case RideSetSetting::musicType:
             {
@@ -146,11 +141,6 @@ namespace OpenRCT2::GameActions
                 }
                 break;
             case RideSetSetting::rideType:
-                if (_value >= RIDE_TYPE_COUNT)
-                {
-                    LOG_ERROR("Invalid ride type: %u", _value);
-                    return Result(Status::invalidParameters, STR_CANT_CHANGE_OPERATING_MODE, STR_ERR_VALUE_OUT_OF_RANGE);
-                }
                 if (!gameState.cheats.allowArbitraryRideTypeChanges)
                 {
                     LOG_ERROR("Arbitrary ride type changes not allowed.");
