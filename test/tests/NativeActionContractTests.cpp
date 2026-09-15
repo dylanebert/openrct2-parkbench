@@ -1605,8 +1605,7 @@ TEST_F(NativeActionContractTrackPlace, RejectsRideTypeCountWithArbitraryChangesW
     auto invalidRideType = legalArgs;
     invalidRideType["rideType"] = RIDE_TYPE_COUNT;
     ExpectRejected(
-        state, rideId, legalArgs, invalidRideType, GameActions::Status::invalidParameters,
-        STR_ERR_VALUE_OUT_OF_RANGE);
+        state, rideId, legalArgs, invalidRideType, GameActions::Status::invalidParameters, STR_ERR_VALUE_OUT_OF_RANGE);
 }
 
 TEST_F(NativeActionContractTrackPlace, RejectsOriginAndBrakeSpeedWithoutMutation)

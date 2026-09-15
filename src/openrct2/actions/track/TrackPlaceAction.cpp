@@ -111,16 +111,16 @@ namespace OpenRCT2::GameActions
                 Status::invalidParameters, STR_RIDE_CONSTRUCTION_CANT_CONSTRUCT_THIS_HERE, STR_ERR_VALUE_OUT_OF_RANGE);
         }
 
-        if (_rideType != ride->type && !gameState.cheats.allowArbitraryRideTypeChanges)
-        {
-            return Result(Status::invalidParameters, STR_RIDE_CONSTRUCTION_CANT_CONSTRUCT_THIS_HERE, kStringIdNone);
-        }
-
         if (_rideType >= RIDE_TYPE_COUNT)
         {
             LOG_ERROR("Invalid ride type for track placement, rideType = %d", _rideType);
             return Result(
                 Status::invalidParameters, STR_RIDE_CONSTRUCTION_CANT_CONSTRUCT_THIS_HERE, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
+
+        if (_rideType != ride->type && !gameState.cheats.allowArbitraryRideTypeChanges)
+        {
+            return Result(Status::invalidParameters, STR_RIDE_CONSTRUCTION_CANT_CONSTRUCT_THIS_HERE, kStringIdNone);
         }
 
         if (_brakeSpeed > kMaximumTrackSpeed)
