@@ -409,6 +409,11 @@ namespace
         EXPECT_EQ(ride.type, rideType);
         if (rideObject != kObjectEntryIndexNull)
             EXPECT_EQ(ride.subtype, rideObject);
+        if (rideType == static_cast<ride_type_t>(81))
+        {
+            EXPECT_TRUE(ride.customName.empty());
+            EXPECT_EQ(ride.defaultNameNumber, 1);
+        }
         for (const auto& colour : ride.trackColours)
         {
             EXPECT_EQ(colour.main, descriptor.ColourPresets.list[args.at("colour1").get<uint8_t>()].main);
@@ -452,6 +457,20 @@ namespace
         EXPECT_EQ(ride.liftHillSpeed, descriptor.LiftData.minimum_speed);
         EXPECT_EQ(ride.mode, ride.getDefaultMode());
         EXPECT_EQ(ride.musicTuneId, kTuneIDNull);
+        if (rideType == static_cast<ride_type_t>(81))
+        {
+            auto& objectManager = GetContext()->GetObjectManager();
+            const auto expectedMusic = objectManager.GetLoadedObjectEntryIndex(descriptor.DefaultMusic);
+            ASSERT_NE(expectedMusic, kObjectEntryIndexNull);
+            EXPECT_EQ(ride.music, expectedMusic);
+            EXPECT_FALSE(ride.flags.has(RideFlag::music));
+            EXPECT_TRUE(descriptor.flags.has(RtdFlag::allowMusic));
+            EXPECT_FALSE(descriptor.flags.has(RtdFlag::hasMusicByDefault));
+            EXPECT_EQ(state.park.flags & PARK_FLAGS_NO_MONEY, 0);
+            ASSERT_GT(state.park.entranceFee, 0);
+            EXPECT_EQ(ride.price[0], 0);
+            EXPECT_EQ(ride.price[1], 0);
+        }
         EXPECT_TRUE(ride.ratings.isNull());
         EXPECT_EQ(ride.value, kRideValueUndefined);
         EXPECT_EQ(ride.satisfaction, 255);
@@ -894,14 +913,57 @@ protected:
         ASSERT_EQ(
             GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10))->GetFirstNonNullRideType(), static_cast<ride_type_t>(81));
     }
+
+    void LoadResearchObjects()
+    {
+        LoadPark("small_park_with_ferris_wheel.sv6");
+        auto& objectManager = GetContext()->GetObjectManager();
+        std::vector<ObjectEntryDescriptor> unload;
+        for (const auto slot : { static_cast<ObjectEntryIndex>(10), static_cast<ObjectEntryIndex>(11) })
+        {
+            if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, slot); object != nullptr)
+                unload.push_back(object->GetDescriptor());
+        }
+        if (!unload.empty())
+            objectManager.UnloadObjects(unload);
+        unload.clear();
+
+        for (const auto* objectName : { "rct2.ride.ptct1", "rct2.ride.ptct2" })
+        {
+            const auto slot = objectManager.GetLoadedObjectEntryIndex(objectName);
+            if (slot != kObjectEntryIndexNull)
+            {
+                auto* object = objectManager.GetLoadedObject(ObjectType::ride, slot);
+                ASSERT_NE(object, nullptr);
+                unload.push_back(object->GetDescriptor());
+            }
+        }
+        if (!unload.empty())
+            objectManager.UnloadObjects(unload);
+
+        ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.ptct1"), 10), nullptr);
+        ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.ptct2"), 11), nullptr);
+        const auto& entries = objectManager.GetAllRideEntries(RIDE_TYPE_WOODEN_ROLLER_COASTER);
+        ASSERT_EQ(entries.size(), 2U);
+        EXPECT_EQ(entries[0], static_cast<ObjectEntryIndex>(10));
+        EXPECT_EQ(entries[1], static_cast<ObjectEntryIndex>(11));
+        for (const auto entryIndex : entries)
+        {
+            const auto* entry = GetRideEntryByIndex(entryIndex);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_NE(std::ranges::find(entry->ride_type, RIDE_TYPE_WOODEN_ROLLER_COASTER), std::end(entry->ride_type));
+        }
+    }
 };
 
 TEST_F(NativeActionContractRideCreate, MalformedEnterpriseObjectRejectedBeforeAllocation)
 {
     LoadPark("small_park_with_ferris_wheel.sv6");
     auto& state = OpenRCT2::getGameState();
-    ASSERT_NE(GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10)), nullptr)
-        << "Enterprise object slot 10 is required by this direct fixture";
+    const auto* entry = GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10));
+    ASSERT_NE(entry, nullptr) << "Enterprise object slot 10 is required by this direct fixture";
+    EXPECT_NE(std::ranges::find(entry->ride_type, static_cast<ride_type_t>(81)), std::end(entry->ride_type));
+    EXPECT_EQ(std::ranges::find(entry->ride_type, static_cast<ride_type_t>(33)), std::end(entry->ride_type));
     ExpectRideCreateRejected(
         state, RideCreateArgs(static_cast<ride_type_t>(33)), GameActions::Status::invalidParameters,
         STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE, "invalid_parameters");
@@ -946,6 +1008,21 @@ TEST_F(NativeActionContractRideCreate, RejectsInspectedBoundsAndPreservesAllocat
     ExpectRideCreateRejected(
         vehicleState, RideCreateArgs(81, 10, 0, entry->vehicle_preset_list->count), GameActions::Status::invalidParameters,
         STR_CANT_CREATE_NEW_RIDE_ATTRACTION, kStringIdNone, "invalid_parameters");
+}
+
+TEST_F(NativeActionContractRideCreate, NullSubtypeWithNoLoadedEntriesRejectsBeforeAllocation)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& objectManager = GetContext()->GetObjectManager();
+    auto* enterprise = objectManager.GetLoadedObject(ObjectType::ride, static_cast<ObjectEntryIndex>(10));
+    ASSERT_NE(enterprise, nullptr);
+    objectManager.UnloadObjects({ enterprise->GetDescriptor() });
+    auto& entries = objectManager.GetAllRideEntries(static_cast<ride_type_t>(81));
+    ASSERT_TRUE(entries.empty());
+    ExpectRideCreateRejected(
+        OpenRCT2::getGameState(), RideCreateArgs(81, static_cast<ObjectEntryIndex>(kObjectEntryIndexNull)),
+        GameActions::Status::invalidParameters, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE,
+        "invalid_parameters");
 }
 
 TEST_F(NativeActionContractRideCreate, RejectsFreeSlotExhaustionBeforeAllocation)
@@ -1015,12 +1092,25 @@ TEST_F(NativeActionContractRideCreate, NullSubtypeSelectionHonorsResearchAndIgno
 {
     for (const bool ignoreResearch : { false, true })
     {
-        LoadPark("small_park_with_ferris_wheel.sv6");
+        LoadResearchObjects();
         auto& state = OpenRCT2::getGameState();
+        const auto& entries = GetContext()->GetObjectManager().GetAllRideEntries(RIDE_TYPE_WOODEN_ROLLER_COASTER);
+        ASSERT_EQ(entries.size(), 2U);
+        ASSERT_FALSE(GetRideTypeDescriptor(RIDE_TYPE_WOODEN_ROLLER_COASTER).flags.has(RtdFlag::listVehiclesSeparately));
+        SetEveryRideEntryNotInvented();
+        for (const auto entry : entries)
+            ASSERT_FALSE(RideEntryIsInvented(entry));
+        const auto frontEntry = entries.front();
+        const auto researchedEntry = entries.back();
+        ASSERT_NE(frontEntry, researchedEntry);
+        RideEntrySetInvented(researchedEntry);
+        ASSERT_FALSE(RideEntryIsInvented(frontEntry));
+        ASSERT_TRUE(RideEntryIsInvented(researchedEntry));
+        ASSERT_NE(
+            std::ranges::find(GetRideEntryByIndex(researchedEntry)->ride_type, RIDE_TYPE_WOODEN_ROLLER_COASTER),
+            std::end(GetRideEntryByIndex(researchedEntry)->ride_type));
         state.cheats.ignoreResearchStatus = ignoreResearch;
-        const auto& entries = GetContext()->GetObjectManager().GetAllRideEntries(static_cast<ride_type_t>(81));
-        ASSERT_FALSE(entries.empty());
-        auto args = RideCreateArgs(81, static_cast<ObjectEntryIndex>(kObjectEntryIndexNull));
+        auto args = RideCreateArgs(RIDE_TYPE_WOODEN_ROLLER_COASTER, static_cast<ObjectEntryIndex>(kObjectEntryIndexNull));
         const auto queried = QueryNativeAction("RideCreateAction", args, state);
         ASSERT_TRUE(queried.ok) << queried.message;
         ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
@@ -1029,7 +1119,7 @@ TEST_F(NativeActionContractRideCreate, NullSubtypeSelectionHonorsResearchAndIgno
         ASSERT_TRUE(executed.ok) << executed.message;
         ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
         ASSERT_NE(GetRide(target), nullptr);
-        EXPECT_EQ(GetRide(target)->subtype, entries.front());
+        EXPECT_EQ(GetRide(target)->subtype, ignoreResearch ? frontEntry : researchedEntry);
         ExpectRideCreateAssignments(*GetRide(target), state, args);
     }
 }
