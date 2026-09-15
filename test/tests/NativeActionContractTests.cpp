@@ -9,6 +9,7 @@
 #include "TestData.h"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <gtest/gtest.h>
@@ -23,11 +24,16 @@
 #include <openrct2/actions/CommandFlag.h>
 #include <openrct2/actions/GameAction.hpp>
 #include <openrct2/actions/GameActionRunner.h>
+#include <openrct2/actions/ride/RideCreateAction.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
+#include <openrct2/localisation/StringIds.h>
+#include <openrct2/management/Research.h>
+#include <openrct2/object/Object.h>
 #include <openrct2/object/ObjectManager.h>
 #include <openrct2/ride/Ride.h>
+#include <openrct2/ride/RideData.h>
 #include <openrct2/world/Map.h>
 #include <set>
 #include <sstream>
@@ -237,6 +243,258 @@ namespace
         const auto result = GameActions::ExecuteSynchronous(&action, state);
         gInUpdateCode = oldInUpdateCode;
         return result.error == GameActions::Status::ok;
+    }
+
+    json_t RideCreateArgs(
+        ride_type_t rideType = static_cast<ride_type_t>(81), ObjectEntryIndex rideObject = static_cast<ObjectEntryIndex>(10),
+        uint8_t trackColour = 0, uint8_t vehicleColour = 0, ObjectEntryIndex entranceObject = static_cast<ObjectEntryIndex>(10),
+        RideInspection inspection = RideInspection::never)
+    {
+        return {
+            { "rideType", rideType },
+            { "rideObject", rideObject },
+            { "entranceObject", entranceObject },
+            { "colour1", trackColour },
+            { "colour2", vehicleColour },
+            { "inspectionInterval", static_cast<uint8_t>(inspection) },
+        };
+    }
+
+    json_t RideCreateResultProjection(const GameActions::Result& result)
+    {
+        return {
+            { "status", static_cast<uint16_t>(result.error) },
+            { "accepted", result.error == GameActions::Status::ok },
+            { "cost", result.cost },
+            { "position", { { "x", result.position.x }, { "y", result.position.y }, { "z", result.position.z } } },
+        };
+    }
+
+    json_t RideCreateRejectedResult(GameActions::Status status, StringId title, StringId message, std::string_view code)
+    {
+        const GameActions::Result expected(status, title, message);
+        auto result = RideCreateResultProjection(expected);
+        result["action"] = "RideCreateAction";
+        result["rejection"] = {
+            { "code", code },
+            { "title", expected.getErrorTitle() },
+            { "message", expected.getErrorMessage() },
+            { "detail", { { "status", static_cast<uint16_t>(status) } } },
+        };
+        return result;
+    }
+
+    json_t RideCreateRideProjection(const Ride& ride)
+    {
+        auto coords = [](const auto& value) {
+            json_t result = { { "x", value.x }, { "y", value.y } };
+            if constexpr (requires { value.z; })
+                result["z"] = value.z;
+            return result;
+        };
+        auto vehicleColour = [](const VehicleColour& value) {
+            return json_t{
+                { "body", static_cast<uint8_t>(value.Body) },
+                { "trim", static_cast<uint8_t>(value.Trim) },
+                { "tertiary", static_cast<uint8_t>(value.Tertiary) },
+            };
+        };
+        json_t stations = json_t::array();
+        for (const auto& station : ride.getStations())
+        {
+            stations.push_back(
+                {
+                    { "start", coords(station.Start) },
+                    { "entrance", coords(station.Entrance) },
+                    { "exit", coords(station.Exit) },
+                });
+        }
+        json_t trackColours = json_t::array();
+        for (const auto& colour : ride.trackColours)
+        {
+            trackColours.push_back(
+                {
+                    { "main", static_cast<uint8_t>(colour.main) },
+                    { "additional", static_cast<uint8_t>(colour.additional) },
+                    { "supports", static_cast<uint8_t>(colour.supports) },
+                });
+        }
+        json_t vehicleColours = json_t::array();
+        for (const auto& colour : ride.vehicleColours)
+            vehicleColours.push_back(vehicleColour(colour));
+        return {
+            { "id", ride.id.ToUnderlying() },
+            { "type", ride.type },
+            { "subtype", ride.subtype },
+            { "trackColours", std::move(trackColours) },
+            { "vehicleColourSettings", static_cast<uint8_t>(ride.vehicleColourSettings) },
+            { "vehicleColours", std::move(vehicleColours) },
+            { "overallView", { { "x", ride.overallView.x }, { "y", ride.overallView.y } } },
+            { "stations", std::move(stations) },
+            { "status", static_cast<uint8_t>(ride.status) },
+            { "numTrains", ride.numTrains },
+            { "proposedNumTrains", ride.proposedNumTrains },
+            { "maxTrains", ride.maxTrains },
+            { "numCarsPerTrain", ride.numCarsPerTrain },
+            { "proposedNumCarsPerTrain", ride.proposedNumCarsPerTrain },
+            { "minCarsPerTrain", ride.minCarsPerTrain },
+            { "maxCarsPerTrain", ride.maxCarsPerTrain },
+            { "minWaitingTime", ride.minWaitingTime },
+            { "maxWaitingTime", ride.maxWaitingTime },
+            { "departFlags", ride.departFlags },
+            { "operationOption", ride.operationOption },
+            { "liftHillSpeed", ride.liftHillSpeed },
+            { "mode", static_cast<uint8_t>(ride.mode) },
+            { "music", ride.music },
+            { "prices", { ride.price[0], ride.price[1] } },
+            { "value", ride.value },
+            { "satisfaction", ride.satisfaction },
+            { "popularity", ride.popularity },
+            { "buildDate", ride.buildDate },
+            { "ratings", { ride.ratings.excitement, ride.ratings.intensity, ride.ratings.nausea } },
+            { "breakdownReason", static_cast<uint8_t>(ride.breakdownReason) },
+            { "upkeepCost", ride.upkeepCost },
+            { "reliability", ride.reliability },
+            { "unreliabilityFactor", ride.unreliabilityFactor },
+            { "inspectionInterval", static_cast<uint8_t>(ride.inspectionInterval) },
+            { "lastCrashType", ride.lastCrashType },
+            { "incomePerHour", ride.incomePerHour },
+            { "profit", ride.profit },
+            { "entranceStyle", ride.entranceStyle },
+            { "numCircuits", ride.numCircuits },
+        };
+    }
+
+    json_t RideCreateAllocationProjection(const GameState_t& state)
+    {
+        json_t rides = json_t::array();
+        for (const auto& ride : state.rides)
+        {
+            if (!ride.id.IsNull())
+                rides.push_back(RideCreateRideProjection(ride));
+        }
+        return {
+            { "nextFree", GetNextFreeRideId().IsNull() ? json_t(nullptr) : json_t(GetNextFreeRideId().ToUnderlying()) },
+            { "count", RideGetCount() },
+            { "rides", std::move(rides) },
+        };
+    }
+
+    void ExpectRideCreateRejected(
+        GameState_t& state, const json_t& args, GameActions::Status status, StringId title, StringId message,
+        std::string_view code)
+    {
+        const auto before = RideCreateAllocationProjection(state);
+        const auto expected = RideCreateRejectedResult(status, title, message, code);
+        const auto queried = QueryNativeAction("RideCreateAction", args, state);
+        ASSERT_TRUE(queried.ok) << queried.message;
+        EXPECT_EQ(queried.value, expected);
+        EXPECT_EQ(RideCreateAllocationProjection(state), before);
+
+        const auto executed = ExecuteNativeAction("RideCreateAction", args, state);
+        ASSERT_TRUE(executed.ok) << executed.message;
+        EXPECT_EQ(executed.value, expected);
+        EXPECT_EQ(RideCreateAllocationProjection(state), before);
+    }
+
+    void ExpectRideCreateAssignments(const Ride& ride, const GameState_t& state, const json_t& args)
+    {
+        const auto rideType = args.at("rideType").get<ride_type_t>();
+        const auto rideObject = args.at("rideObject").get<ObjectEntryIndex>();
+        const auto* entry = GetRideEntryByIndex(ride.subtype);
+        ASSERT_NE(entry, nullptr);
+        const auto& descriptor = GetRideTypeDescriptor(rideType);
+        ASSERT_LT(args.at("colour1").get<uint8_t>(), descriptor.ColourPresets.count);
+
+        EXPECT_EQ(ride.type, rideType);
+        if (rideObject != kObjectEntryIndexNull)
+            EXPECT_EQ(ride.subtype, rideObject);
+        if (rideType == static_cast<ride_type_t>(81))
+        {
+            EXPECT_TRUE(ride.customName.empty());
+            EXPECT_EQ(ride.defaultNameNumber, 1);
+        }
+        for (const auto& colour : ride.trackColours)
+        {
+            EXPECT_EQ(colour.main, descriptor.ColourPresets.list[args.at("colour1").get<uint8_t>()].main);
+            EXPECT_EQ(colour.additional, descriptor.ColourPresets.list[args.at("colour1").get<uint8_t>()].additional);
+            EXPECT_EQ(colour.supports, descriptor.ColourPresets.list[args.at("colour1").get<uint8_t>()].supports);
+        }
+        const auto* presets = entry->vehicle_preset_list;
+        if (presets->count > 0 && presets->count != 255)
+        {
+            EXPECT_EQ(ride.vehicleColourSettings, VehicleColourSettings::same);
+            EXPECT_EQ(ride.vehicleColours[0].Body, presets->list[args.at("colour2").get<uint8_t>()].Body);
+            EXPECT_EQ(ride.vehicleColours[0].Trim, presets->list[args.at("colour2").get<uint8_t>()].Trim);
+            EXPECT_EQ(ride.vehicleColours[0].Tertiary, presets->list[args.at("colour2").get<uint8_t>()].Tertiary);
+        }
+        else
+        {
+            EXPECT_EQ(ride.vehicleColourSettings, VehicleColourSettings::perTrain);
+        }
+
+        EXPECT_TRUE(ride.overallView.IsNull());
+        for (const auto& station : ride.getStations())
+        {
+            EXPECT_TRUE(station.Start.IsNull());
+            EXPECT_TRUE(station.Entrance.IsNull());
+            EXPECT_TRUE(station.Exit.IsNull());
+        }
+        EXPECT_EQ(ride.status, RideStatus::closed);
+        EXPECT_EQ(ride.numTrains, 1);
+        EXPECT_EQ(ride.maxTrains, Limits::kMaxTrainsPerRide);
+        EXPECT_EQ(ride.numCarsPerTrain, 1);
+        EXPECT_EQ(ride.proposedNumCarsPerTrain, entry->max_cars_in_train);
+        const auto expectedProposedTrains = state.cheats.disableTrainLengthLimit
+            ? (entry->cars_per_flat_ride == kNoFlatRideCars ? 12 : entry->cars_per_flat_ride)
+            : 32;
+        EXPECT_EQ(ride.proposedNumTrains, expectedProposedTrains);
+        EXPECT_EQ(ride.minWaitingTime, 10);
+        EXPECT_EQ(ride.maxWaitingTime, 60);
+        EXPECT_EQ(ride.departFlags, RIDE_DEPART_WAIT_FOR_MINIMUM_LENGTH | 3);
+        EXPECT_EQ(
+            ride.operationOption, (descriptor.OperatingSettings.MinValue * 3 + descriptor.OperatingSettings.MaxValue) / 4);
+        EXPECT_EQ(ride.liftHillSpeed, descriptor.LiftData.minimum_speed);
+        EXPECT_EQ(ride.mode, ride.getDefaultMode());
+        EXPECT_EQ(ride.musicTuneId, kTuneIDNull);
+        if (rideType == static_cast<ride_type_t>(81))
+        {
+            auto& objectManager = GetContext()->GetObjectManager();
+            const auto expectedMusic = objectManager.GetLoadedObjectEntryIndex(descriptor.DefaultMusic);
+            ASSERT_NE(expectedMusic, kObjectEntryIndexNull);
+            EXPECT_EQ(ride.music, expectedMusic);
+            EXPECT_FALSE(ride.flags.has(RideFlag::music));
+            EXPECT_TRUE(descriptor.flags.has(RtdFlag::allowMusic));
+            EXPECT_FALSE(descriptor.flags.has(RtdFlag::hasMusicByDefault));
+            EXPECT_EQ(state.park.flags & PARK_FLAGS_NO_MONEY, 0);
+            ASSERT_GT(state.park.entranceFee, 0);
+            EXPECT_EQ(ride.price[0], 0);
+            EXPECT_EQ(ride.price[1], 0);
+        }
+        EXPECT_TRUE(ride.ratings.isNull());
+        EXPECT_EQ(ride.value, kRideValueUndefined);
+        EXPECT_EQ(ride.satisfaction, 255);
+        EXPECT_EQ(ride.popularity, 255);
+        EXPECT_EQ(ride.buildDate, state.date.GetMonthsElapsed());
+        EXPECT_EQ(ride.breakdownReason, Breakdown::none);
+        EXPECT_EQ(ride.upkeepCost, kMoney64Undefined);
+        EXPECT_EQ(ride.reliability, kRideInitialReliability);
+        EXPECT_EQ(ride.unreliabilityFactor, 1);
+        EXPECT_EQ(ride.inspectionInterval, static_cast<RideInspection>(args.at("inspectionInterval").get<uint8_t>()));
+        EXPECT_EQ(ride.lastCrashType, RIDE_CRASH_TYPE_NONE);
+        EXPECT_EQ(ride.incomePerHour, kMoney64Undefined);
+        EXPECT_EQ(ride.profit, kMoney64Undefined);
+        EXPECT_EQ(ride.entranceStyle, args.at("entranceObject").get<ObjectEntryIndex>());
+        EXPECT_EQ(ride.numCircuits, 1);
+        if (state.park.flags & PARK_FLAGS_NO_MONEY)
+        {
+            EXPECT_EQ(ride.price[0], 0);
+            EXPECT_EQ(ride.price[1], 0);
+        }
+        if (state.scenarioOptions.objective.Type == Scenario::ObjectiveType::buildTheBest)
+            EXPECT_EQ(ride.price[0], 0);
+        EXPECT_EQ(ride.minCarsPerTrain, entry->min_cars_in_train);
+        EXPECT_EQ(ride.maxCarsPerTrain, entry->max_cars_in_train);
     }
 
     class NativeActionContractHarness : public testing::Test
@@ -630,6 +888,308 @@ TEST(NativeActionContractInventory, RejectsZeroExpectedFamilyPopulation)
     const auto result = ValidateInventory(rows, { { "station-track-maze", 0 } }, { "RideEntranceExitPlaceAction" });
     EXPECT_FALSE(result.ok);
     EXPECT_NE(result.failure.find("zero expected population"), std::string::npos);
+}
+
+class NativeActionContractRideCreate : public NativeActionContractHarness
+{
+protected:
+    void LoadPark(const std::string& name)
+    {
+        NativeActionContractHarness::LoadPark(name);
+        auto& objectManager = GetContext()->GetObjectManager();
+        std::vector<ObjectEntryDescriptor> unload;
+        if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, 10); object != nullptr)
+            unload.push_back(object->GetDescriptor());
+        const auto enterpriseSlot = objectManager.GetLoadedObjectEntryIndex("rct2.ride.enterp");
+        if (enterpriseSlot != kObjectEntryIndexNull && enterpriseSlot != 10)
+        {
+            if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, enterpriseSlot); object != nullptr)
+                unload.push_back(object->GetDescriptor());
+        }
+        if (!unload.empty())
+            objectManager.UnloadObjects(unload);
+        ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.enterp"), 10), nullptr);
+        ASSERT_NE(GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10)), nullptr);
+        ASSERT_EQ(
+            GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10))->GetFirstNonNullRideType(), static_cast<ride_type_t>(81));
+    }
+
+    void LoadResearchObjects()
+    {
+        LoadPark("small_park_with_ferris_wheel.sv6");
+        auto& objectManager = GetContext()->GetObjectManager();
+        std::vector<ObjectEntryDescriptor> unload;
+        for (const auto slot : { static_cast<ObjectEntryIndex>(10), static_cast<ObjectEntryIndex>(11) })
+        {
+            if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, slot); object != nullptr)
+                unload.push_back(object->GetDescriptor());
+        }
+        if (!unload.empty())
+            objectManager.UnloadObjects(unload);
+        unload.clear();
+
+        for (const auto* objectName : { "rct2.ride.ptct1", "rct2.ride.ptct2" })
+        {
+            const auto slot = objectManager.GetLoadedObjectEntryIndex(objectName);
+            if (slot != kObjectEntryIndexNull)
+            {
+                auto* object = objectManager.GetLoadedObject(ObjectType::ride, slot);
+                ASSERT_NE(object, nullptr);
+                unload.push_back(object->GetDescriptor());
+            }
+        }
+        if (!unload.empty())
+            objectManager.UnloadObjects(unload);
+
+        ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.ptct1"), 10), nullptr);
+        ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.ptct2"), 11), nullptr);
+        const auto& entries = objectManager.GetAllRideEntries(RIDE_TYPE_WOODEN_ROLLER_COASTER);
+        ASSERT_EQ(entries.size(), 2u);
+        EXPECT_EQ(entries[0], static_cast<ObjectEntryIndex>(10));
+        EXPECT_EQ(entries[1], static_cast<ObjectEntryIndex>(11));
+        for (const auto entryIndex : entries)
+        {
+            const auto* entry = GetRideEntryByIndex(entryIndex);
+            ASSERT_NE(entry, nullptr);
+            EXPECT_NE(std::ranges::find(entry->ride_type, RIDE_TYPE_WOODEN_ROLLER_COASTER), std::end(entry->ride_type));
+        }
+    }
+};
+
+TEST_F(NativeActionContractRideCreate, MalformedEnterpriseObjectRejectedBeforeAllocation)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& state = OpenRCT2::getGameState();
+    const auto* entry = GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10));
+    ASSERT_NE(entry, nullptr) << "Enterprise object slot 10 is required by this direct fixture";
+    EXPECT_NE(std::ranges::find(entry->ride_type, static_cast<ride_type_t>(81)), std::end(entry->ride_type));
+    EXPECT_EQ(std::ranges::find(entry->ride_type, static_cast<ride_type_t>(33)), std::end(entry->ride_type));
+    ExpectRideCreateRejected(
+        state, RideCreateArgs(static_cast<ride_type_t>(33)), GameActions::Status::invalidParameters,
+        STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE, "invalid_parameters");
+}
+
+TEST_F(NativeActionContractRideCreate, RejectsInspectedBoundsAndPreservesAllocation)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& inspectionState = OpenRCT2::getGameState();
+    ExpectRideCreateRejected(
+        inspectionState, RideCreateArgs(81, 10, 0, 0, 10, static_cast<RideInspection>(7)),
+        GameActions::Status::invalidParameters, STR_CANT_CHANGE_OPERATING_MODE, STR_ERR_VALUE_OUT_OF_RANGE,
+        "invalid_parameters");
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& typeState = OpenRCT2::getGameState();
+    ExpectRideCreateRejected(
+        typeState, RideCreateArgs(static_cast<ride_type_t>(RIDE_TYPE_COUNT)), GameActions::Status::invalidParameters,
+        STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE, "invalid_parameters");
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& colourState = OpenRCT2::getGameState();
+    const auto colourCount = GetRideTypeDescriptor(static_cast<ride_type_t>(81)).ColourPresets.count;
+    ASSERT_LT(colourCount, 255);
+    ExpectRideCreateRejected(
+        colourState, RideCreateArgs(81, 10, colourCount), GameActions::Status::invalidParameters,
+        STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_ERR_INVALID_COLOUR, "invalid_parameters");
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& objectState = OpenRCT2::getGameState();
+    ExpectRideCreateRejected(
+        objectState, RideCreateArgs(81, static_cast<ObjectEntryIndex>(254)), GameActions::Status::invalidParameters,
+        STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_UNKNOWN_OBJECT_TYPE, "invalid_parameters");
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& vehicleState = OpenRCT2::getGameState();
+    const auto* entry = GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10));
+    ASSERT_NE(entry, nullptr);
+    ASSERT_NE(entry->vehicle_preset_list, nullptr);
+    ASSERT_GT(entry->vehicle_preset_list->count, 0);
+    ASSERT_LT(entry->vehicle_preset_list->count, 255);
+    ExpectRideCreateRejected(
+        vehicleState, RideCreateArgs(81, 10, 0, entry->vehicle_preset_list->count), GameActions::Status::invalidParameters,
+        STR_CANT_CREATE_NEW_RIDE_ATTRACTION, kStringIdNone, "invalid_parameters");
+}
+
+TEST_F(NativeActionContractRideCreate, NullSubtypeWithNoLoadedEntriesRejectsBeforeAllocation)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& objectManager = GetContext()->GetObjectManager();
+    auto* enterprise = objectManager.GetLoadedObject(ObjectType::ride, static_cast<ObjectEntryIndex>(10));
+    ASSERT_NE(enterprise, nullptr);
+    objectManager.UnloadObjects({ enterprise->GetDescriptor() });
+    auto& entries = objectManager.GetAllRideEntries(static_cast<ride_type_t>(81));
+    ASSERT_TRUE(entries.empty());
+    ExpectRideCreateRejected(
+        OpenRCT2::getGameState(), RideCreateArgs(81, static_cast<ObjectEntryIndex>(kObjectEntryIndexNull)),
+        GameActions::Status::invalidParameters, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE,
+        "invalid_parameters");
+}
+
+TEST_F(NativeActionContractRideCreate, RejectsFreeSlotExhaustionBeforeAllocation)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& state = OpenRCT2::getGameState();
+    for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+    {
+        const auto rideId = RideId::FromUnderlying(i);
+        if (GetRide(rideId) == nullptr)
+            ASSERT_NE(RideAllocateAtIndex(rideId), nullptr);
+    }
+    ASSERT_TRUE(GetNextFreeRideId().IsNull());
+    ExpectRideCreateRejected(
+        state, RideCreateArgs(), GameActions::Status::noFreeElements, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_TOO_MANY_RIDES,
+        "no_free_elements");
+}
+
+TEST_F(NativeActionContractRideCreate, AcceptedEnterpriseMatchesOrdinaryExecutionAndAssignedFields)
+{
+    const auto args = RideCreateArgs();
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& ordinaryState = OpenRCT2::getGameState();
+    const auto ordinaryTarget = GetNextFreeRideId();
+    auto ordinaryAction = std::make_unique<GameActions::RideCreateAction>(
+        args.at("rideType").get<ride_type_t>(), args.at("rideObject").get<ObjectEntryIndex>(),
+        args.at("colour1").get<uint8_t>(), args.at("colour2").get<uint8_t>(), args.at("entranceObject").get<ObjectEntryIndex>(),
+        static_cast<RideInspection>(args.at("inspectionInterval").get<uint8_t>()));
+    ordinaryAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+    const auto ordinaryCashBefore = ordinaryState.park.cash;
+    const auto oldInUpdateCode = gInUpdateCode;
+    gInUpdateCode = true;
+    const auto ordinaryResult = GameActions::Execute(ordinaryAction.get(), ordinaryState);
+    gInUpdateCode = oldInUpdateCode;
+    ASSERT_EQ(ordinaryResult.error, GameActions::Status::ok);
+    ASSERT_EQ(ordinaryResult.expenditure, ExpenditureType::rideConstruction);
+    ASSERT_EQ(ordinaryResult.cost, 0);
+    ASSERT_EQ(ordinaryResult.getData<RideId>(), ordinaryTarget);
+    ASSERT_NE(GetRide(ordinaryTarget), nullptr);
+    ExpectRideCreateAssignments(*GetRide(ordinaryTarget), ordinaryState, args);
+    const auto ordinaryProjection = RideCreateRideProjection(*GetRide(ordinaryTarget));
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& publicState = OpenRCT2::getGameState();
+    const auto publicTarget = GetNextFreeRideId();
+    const auto publicCashBefore = publicState.park.cash;
+    const auto publicQuery = QueryNativeAction("RideCreateAction", args, publicState);
+    ASSERT_TRUE(publicQuery.ok) << publicQuery.message;
+    ASSERT_TRUE(publicQuery.value["accepted"]) << publicQuery.value.dump();
+    const auto publicExecution = ExecuteNativeAction("RideCreateAction", args, publicState);
+    ASSERT_TRUE(publicExecution.ok) << publicExecution.message;
+    ASSERT_TRUE(publicExecution.value["accepted"]) << publicExecution.value.dump();
+    ASSERT_EQ(publicTarget, ordinaryTarget);
+    ASSERT_NE(GetRide(publicTarget), nullptr);
+    ExpectRideCreateAssignments(*GetRide(publicTarget), publicState, args);
+    EXPECT_EQ(publicState.park.cash - publicCashBefore, ordinaryState.park.cash - ordinaryCashBefore);
+    EXPECT_EQ(publicExecution.value, [&] {
+        auto expected = RideCreateResultProjection(ordinaryResult);
+        expected["action"] = "RideCreateAction";
+        return expected;
+    }());
+    EXPECT_EQ(RideCreateRideProjection(*GetRide(publicTarget)), ordinaryProjection);
+}
+
+TEST_F(NativeActionContractRideCreate, NullSubtypeSelectionHonorsResearchAndIgnoreResearch)
+{
+    for (const bool ignoreResearch : { false, true })
+    {
+        LoadResearchObjects();
+        auto& state = OpenRCT2::getGameState();
+        const auto& entries = GetContext()->GetObjectManager().GetAllRideEntries(RIDE_TYPE_WOODEN_ROLLER_COASTER);
+        ASSERT_EQ(entries.size(), 2u);
+        ASSERT_FALSE(GetRideTypeDescriptor(RIDE_TYPE_WOODEN_ROLLER_COASTER).flags.has(RtdFlag::listVehiclesSeparately));
+        SetEveryRideEntryNotInvented();
+        for (const auto entry : entries)
+            ASSERT_FALSE(RideEntryIsInvented(entry));
+        const auto frontEntry = entries.front();
+        const auto researchedEntry = entries.back();
+        ASSERT_NE(frontEntry, researchedEntry);
+        RideEntrySetInvented(researchedEntry);
+        ASSERT_FALSE(RideEntryIsInvented(frontEntry));
+        ASSERT_TRUE(RideEntryIsInvented(researchedEntry));
+        ASSERT_NE(
+            std::ranges::find(GetRideEntryByIndex(researchedEntry)->ride_type, RIDE_TYPE_WOODEN_ROLLER_COASTER),
+            std::end(GetRideEntryByIndex(researchedEntry)->ride_type));
+        state.cheats.ignoreResearchStatus = ignoreResearch;
+        auto args = RideCreateArgs(RIDE_TYPE_WOODEN_ROLLER_COASTER, static_cast<ObjectEntryIndex>(kObjectEntryIndexNull));
+        const auto queried = QueryNativeAction("RideCreateAction", args, state);
+        ASSERT_TRUE(queried.ok) << queried.message;
+        ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+        const auto target = GetNextFreeRideId();
+        const auto executed = ExecuteNativeAction("RideCreateAction", args, state);
+        ASSERT_TRUE(executed.ok) << executed.message;
+        ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
+        ASSERT_NE(GetRide(target), nullptr);
+        EXPECT_EQ(GetRide(target)->subtype, ignoreResearch ? frontEntry : researchedEntry);
+        ExpectRideCreateAssignments(*GetRide(target), state, args);
+    }
+}
+
+TEST_F(NativeActionContractRideCreate, PublicExecutionRequeriesFreeSlotPremise)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& state = OpenRCT2::getGameState();
+    const auto args = RideCreateArgs();
+    const auto queried = QueryNativeAction("RideCreateAction", args, state);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+    for (RideId::UnderlyingType i = 0; i < Limits::kMaxRidesInPark; ++i)
+    {
+        const auto rideId = RideId::FromUnderlying(i);
+        if (GetRide(rideId) == nullptr)
+            ASSERT_NE(RideAllocateAtIndex(rideId), nullptr);
+    }
+    ASSERT_TRUE(GetNextFreeRideId().IsNull());
+    const auto before = RideCreateAllocationProjection(state);
+    const auto executed = ExecuteNativeAction("RideCreateAction", args, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    EXPECT_FALSE(executed.value["accepted"]) << executed.value.dump();
+    EXPECT_EQ(
+        executed.value,
+        RideCreateRejectedResult(
+            GameActions::Status::noFreeElements, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_TOO_MANY_RIDES, "no_free_elements"));
+    EXPECT_EQ(RideCreateAllocationProjection(state), before);
+}
+
+TEST_F(NativeActionContractRideCreate, MoneyObjectiveAndTrainCheatBranchesRemainOwnerVisible)
+{
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& noMoneyState = OpenRCT2::getGameState();
+    noMoneyState.park.flags |= PARK_FLAGS_NO_MONEY;
+    const auto noMoneyTarget = GetNextFreeRideId();
+    const auto noMoneyArgs = RideCreateArgs();
+    const auto noMoneyResult = ExecuteNativeAction("RideCreateAction", noMoneyArgs, noMoneyState);
+    ASSERT_TRUE(noMoneyResult.ok) << noMoneyResult.message;
+    ASSERT_TRUE(noMoneyResult.value["accepted"]) << noMoneyResult.value.dump();
+    auto* noMoneyRide = GetRide(noMoneyTarget);
+    ASSERT_NE(noMoneyRide, nullptr);
+    EXPECT_EQ(noMoneyRide->price[0], 0);
+    EXPECT_EQ(noMoneyRide->price[1], 0);
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& objectiveState = OpenRCT2::getGameState();
+    objectiveState.scenarioOptions.objective.Type = Scenario::ObjectiveType::buildTheBest;
+    const auto objectiveTarget = GetNextFreeRideId();
+    const auto objectiveArgs = RideCreateArgs();
+    const auto objectiveResult = ExecuteNativeAction("RideCreateAction", objectiveArgs, objectiveState);
+    ASSERT_TRUE(objectiveResult.ok) << objectiveResult.message;
+    ASSERT_TRUE(objectiveResult.value["accepted"]) << objectiveResult.value.dump();
+    auto* objectiveRide = GetRide(objectiveTarget);
+    ASSERT_NE(objectiveRide, nullptr);
+    EXPECT_EQ(objectiveRide->price[0], 0);
+
+    LoadPark("small_park_with_ferris_wheel.sv6");
+    auto& cheatState = OpenRCT2::getGameState();
+    cheatState.cheats.disableTrainLengthLimit = true;
+    const auto cheatTarget = GetNextFreeRideId();
+    const auto cheatArgs = RideCreateArgs();
+    const auto cheatResult = ExecuteNativeAction("RideCreateAction", cheatArgs, cheatState);
+    ASSERT_TRUE(cheatResult.ok) << cheatResult.message;
+    ASSERT_TRUE(cheatResult.value["accepted"]) << cheatResult.value.dump();
+    ASSERT_NE(GetRide(cheatTarget), nullptr);
+    const auto* entry = GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10));
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(
+        GetRide(cheatTarget)->proposedNumTrains, entry->cars_per_flat_ride == kNoFlatRideCars ? 12 : entry->cars_per_flat_ride);
 }
 
 TEST_F(NativeActionContractHarness, RetainedEntranceFixtureConforms)
