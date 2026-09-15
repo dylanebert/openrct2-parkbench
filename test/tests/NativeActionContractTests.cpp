@@ -28,6 +28,7 @@
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
 #include <openrct2/actions/ride/RideSetPriceAction.h>
+#include <openrct2/actions/ride/RideSetStatusAction.h>
 #include <openrct2/actions/track/TrackPlaceAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/localisation/StringIds.h>
@@ -1981,4 +1982,436 @@ TEST_F(NativeActionContractRideSetPrice, PublicSchemaDeclaresCompleteBooleanPrim
     EXPECT_EQ(descriptor->schema["properties"]["isPrimaryPrice"], (json_t{ { "type", "boolean" } }));
     ASSERT_TRUE(descriptor->schema["required"].is_array());
     EXPECT_EQ(descriptor->schema["required"], (json_t{ "ride", "price", "isPrimaryPrice" }));
+}
+
+namespace
+{
+    json_t RideSetStatusResultProjection(const GameActions::Result& result)
+    {
+        return {
+            { "status", static_cast<uint16_t>(result.error) },
+            { "accepted", result.error == GameActions::Status::ok },
+            { "cost", result.cost },
+            { "position", { { "x", result.position.x }, { "y", result.position.y }, { "z", result.position.z } } },
+        };
+    }
+
+    json_t RideSetStatusRejectedResult(GameState_t& state, const json_t& args)
+    {
+        const auto rideId = RideId::FromUnderlying(args.at("ride").get<uint32_t>());
+        const auto status = static_cast<RideStatus>(args.at("status").get<int32_t>());
+        GameActions::RideSetStatusAction action(rideId, status);
+        const auto result = action.Query(state, state.park);
+        auto projection = RideSetStatusResultProjection(result);
+        projection["action"] = "RideSetStatusAction";
+        projection["rejection"] = {
+            { "code", result.error == GameActions::Status::unknown ? "unknown" : "invalid_parameters" },
+            { "title", result.getErrorTitle() },
+            { "message", result.getErrorMessage() },
+            { "detail", { { "status", static_cast<uint16_t>(result.error) } } },
+        };
+        return projection;
+    }
+
+    json_t RideSetStatusOwnerProjection(const GameState_t& state, RideId rideId)
+    {
+        json_t projection = { { "cash", state.park.cash } };
+        const auto* ride = GetRide(rideId);
+        if (ride == nullptr)
+        {
+            projection["ride"] = nullptr;
+            return projection;
+        }
+
+        json_t vehicles = json_t::array();
+        for (const auto vehicle : ride->vehicles)
+            vehicles.push_back(vehicle.IsNull() ? json_t(nullptr) : json_t(vehicle.ToUnderlying()));
+        projection["ride"] = {
+            { "status", static_cast<uint8_t>(ride->status) },
+            { "vehicles", std::move(vehicles) },
+            { "crashed", ride->flags.has(RideFlag::crashed) },
+            { "brokenDown", ride->flags.has(RideFlag::brokenDown) },
+            { "breakdownPending", ride->flags.has(RideFlag::breakdownPending) },
+            { "onTrack", ride->flags.has(RideFlag::onTrack) },
+            { "passStationNoStopping", ride->flags.has(RideFlag::passStationNoStopping) },
+            { "everBeenOpened", ride->flags.has(RideFlag::everBeenOpened) },
+            { "raceWinner", ride->raceWinner.IsNull() ? json_t(nullptr) : json_t(ride->raceWinner.ToUnderlying()) },
+            { "currentIssues", ride->currentIssues },
+            { "lastIssueTime", ride->lastIssueTime },
+            { "measurement", ride->measurement != nullptr },
+        };
+        return projection;
+    }
+
+    class NativeActionContractRideSetStatus : public testing::Test
+    {
+    protected:
+        std::unique_ptr<IContext> _context;
+
+        void LoadPark()
+        {
+            _context.reset();
+            gOpenRCT2Headless = true;
+            gOpenRCT2NoGraphics = true;
+            _context = OpenRCT2::CreateContext();
+            ASSERT_NE(_context, nullptr);
+            const auto resources = std::filesystem::current_path() / "OpenRCT2.app/Contents/Resources";
+            _context->GetPlatformEnvironment().SetBasePath(OpenRCT2::DirBase::openrct2, resources.string());
+            ASSERT_TRUE(_context->Initialise());
+
+            auto importer = OpenRCT2::ParkImporter::CreateS6(_context->GetObjectRepository());
+            auto loadResult = importer->LoadSavedGame(TestData::GetParkPath("small_park_with_ferris_wheel.sv6").c_str(), false);
+            _context->GetObjectManager().LoadObjects(loadResult.RequiredObjects);
+            importer->Import(OpenRCT2::getGameState());
+        }
+
+        void LoadEnterprisePark()
+        {
+            LoadPark();
+            auto& objectManager = GetContext()->GetObjectManager();
+            std::vector<ObjectEntryDescriptor> unload;
+            if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, 10); object != nullptr)
+                unload.push_back(object->GetDescriptor());
+            const auto enterpriseSlot = objectManager.GetLoadedObjectEntryIndex("rct2.ride.enterp");
+            if (enterpriseSlot != kObjectEntryIndexNull && enterpriseSlot != 10)
+            {
+                if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, enterpriseSlot); object != nullptr)
+                    unload.push_back(object->GetDescriptor());
+            }
+            if (!unload.empty())
+                objectManager.UnloadObjects(unload);
+            ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.enterp"), 10), nullptr);
+            ASSERT_NE(GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10)), nullptr);
+            ASSERT_EQ(
+                GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10))->GetFirstNonNullRideType(),
+                static_cast<ride_type_t>(81));
+        }
+
+        void PlaceEndpoint(GameState_t& state, RideId rideId, bool isExit, const TileCoordsXYZD* avoid = nullptr)
+        {
+            const auto* ride = GetRide(rideId);
+            ASSERT_NE(ride, nullptr);
+            for (int32_t x = kTrackOriginX; x <= kTrackOriginX + 96; x += 32)
+            {
+                for (int32_t y = kTrackOriginY; y <= kTrackOriginY + 96; y += 32)
+                {
+                    auto* element = MapGetFirstElementAt(CoordsXY{ x, y });
+                    if (element == nullptr)
+                        continue;
+                    do
+                    {
+                        if (element->getType() != TileElementType::Track)
+                            continue;
+                        const auto* track = element->asTrack();
+                        if (track->GetRideIndex() != rideId || track->GetStationIndex() != StationIndex::FromUnderlying(0))
+                            continue;
+                        for (uint8_t directionValue = 0; directionValue < 4; ++directionValue)
+                        {
+                            const auto direction = static_cast<Direction>(directionValue);
+                            const auto delta = CoordsDirectionDelta[direction];
+                            const CoordsXY endpoint{ x - delta.x, y - delta.y };
+                            const TileCoordsXYZD endpointIdentity{ endpoint, track->getBaseZ(), direction };
+                            if (avoid != nullptr && endpointIdentity.ToCoordsXY() == avoid->ToCoordsXY())
+                                continue;
+                            const json_t args{
+                                { "x", endpoint.x },
+                                { "y", endpoint.y },
+                                { "direction", directionValue },
+                                { "ride", rideId.ToUnderlying() },
+                                { "station", 0 },
+                                { "isExit", isExit },
+                            };
+                            const auto queried = QueryNativeAction("RideEntranceExitPlaceAction", args, state);
+                            ASSERT_TRUE(queried.ok) << queried.message;
+                            if (!queried.value["accepted"])
+                                continue;
+                            const auto executed = ExecuteNativeAction("RideEntranceExitPlaceAction", args, state);
+                            ASSERT_TRUE(executed.ok) << executed.message;
+                            ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
+                            return;
+                        }
+                    } while (!(element++)->isLastForTile());
+                }
+            }
+            ADD_FAILURE() << (isExit ? "Enterprise exit" : "Enterprise entrance") << " could not be placed";
+        }
+
+        RideId BuildEnterpriseRide(GameState_t& state)
+        {
+            state.cheats.sandboxMode = true;
+            state.cheats.disableClearanceChecks = true;
+            const auto rideId = GetNextFreeRideId();
+            const auto created = ExecuteNativeAction("RideCreateAction", RideCreateArgs(), state);
+            if (!created.ok || !created.value.value("accepted", false))
+            {
+                ADD_FAILURE() << (created.ok ? created.value.dump() : created.message);
+                return RideId::GetNull();
+            }
+
+            auto* ride = GetRide(rideId);
+            if (ride == nullptr || ride->type != static_cast<ride_type_t>(81)
+                || ride->subtype != static_cast<ObjectEntryIndex>(10))
+            {
+                ADD_FAILURE() << "Enterprise ride was not created in the expected slot and type";
+                return RideId::GetNull();
+            }
+            ride->status = RideStatus::closed;
+
+            const auto placed = ExecuteNativeAction("TrackPlaceAction", TrackPlaceArgs(rideId), state);
+            if (!placed.ok || !placed.value.value("accepted", false))
+            {
+                ADD_FAILURE() << (placed.ok ? placed.value.dump() : placed.message);
+                return RideId::GetNull();
+            }
+            PlaceEndpoint(state, rideId, false);
+            const auto entrance = GetRide(rideId)->getStation(StationIndex::FromUnderlying(0)).Entrance;
+            if (entrance.IsNull())
+            {
+                ADD_FAILURE() << "Enterprise entrance was not placed";
+                return RideId::GetNull();
+            }
+            PlaceEndpoint(state, rideId, true, &entrance);
+            const auto& station = GetRide(rideId)->getStation(StationIndex::FromUnderlying(0));
+            if (station.Entrance.IsNull() || station.Exit.IsNull())
+            {
+                ADD_FAILURE() << "Enterprise endpoints were not placed";
+                return RideId::GetNull();
+            }
+            return rideId;
+        }
+
+        json_t StatusArgs(RideId rideId, int32_t status) const
+        {
+            return { { "ride", rideId.ToUnderlying() }, { "status", status } };
+        }
+
+        void RemoveEntrance(GameState_t& state, RideId rideId)
+        {
+            auto* ride = GetRide(rideId);
+            ASSERT_NE(ride, nullptr);
+            const auto endpoint = ride->getStation(StationIndex::FromUnderlying(0)).Entrance;
+            ASSERT_FALSE(endpoint.IsNull());
+            GameActions::RideEntranceExitRemoveAction remove(
+                endpoint.ToCoordsXY(), rideId, StationIndex::FromUnderlying(0), false);
+            remove.SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+            ASSERT_TRUE(ExecuteSetupAction(remove, state));
+        }
+
+        void RemoveExit(GameState_t& state, RideId rideId)
+        {
+            auto* ride = GetRide(rideId);
+            ASSERT_NE(ride, nullptr);
+            const auto endpoint = ride->getStation(StationIndex::FromUnderlying(0)).Exit;
+            ASSERT_FALSE(endpoint.IsNull());
+            GameActions::RideEntranceExitRemoveAction remove(
+                endpoint.ToCoordsXY(), rideId, StationIndex::FromUnderlying(0), true);
+            remove.SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+            ASSERT_TRUE(ExecuteSetupAction(remove, state));
+        }
+
+        void ExpectRejected(GameState_t& state, RideId observedRide, const json_t& args)
+        {
+            const auto expected = RideSetStatusRejectedResult(state, args);
+            const auto before = RideSetStatusOwnerProjection(state, observedRide);
+            const auto queried = QueryNativeAction("RideSetStatusAction", args, state);
+            ASSERT_TRUE(queried.ok) << queried.message;
+            EXPECT_EQ(queried.value, expected);
+            EXPECT_EQ(RideSetStatusOwnerProjection(state, observedRide), before);
+            const auto executed = ExecuteNativeAction("RideSetStatusAction", args, state);
+            ASSERT_TRUE(executed.ok) << executed.message;
+            EXPECT_EQ(executed.value, expected);
+            EXPECT_EQ(RideSetStatusOwnerProjection(state, observedRide), before);
+        }
+    };
+} // namespace
+
+TEST_F(NativeActionContractRideSetStatus, TestingThenOpenMatchOrdinaryExecutionAndReturnFields)
+{
+    LoadEnterprisePark();
+    auto& ordinaryState = OpenRCT2::getGameState();
+    const auto ordinaryRide = BuildEnterpriseRide(ordinaryState);
+    const auto testingArgs = StatusArgs(ordinaryRide, 2);
+    const auto openArgs = StatusArgs(ordinaryRide, 1);
+    auto testingAction = std::make_unique<GameActions::RideSetStatusAction>(ordinaryRide, RideStatus::testing);
+    testingAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+    const auto oldInUpdateCode = gInUpdateCode;
+    gInUpdateCode = true;
+    const auto ordinaryTesting = GameActions::Execute(testingAction.get(), ordinaryState);
+    gInUpdateCode = oldInUpdateCode;
+    ASSERT_EQ(ordinaryTesting.error, GameActions::Status::ok);
+    EXPECT_EQ(ordinaryTesting.expenditure, ExpenditureType::rideRunningCosts);
+    EXPECT_EQ(ordinaryTesting.cost, 0);
+    EXPECT_EQ(ordinaryTesting.position, (CoordsXYZ{ 432, 432, 112 }));
+    const auto ordinaryTestingProjection = RideSetStatusOwnerProjection(ordinaryState, ordinaryRide);
+    ASSERT_EQ(ordinaryTestingProjection["ride"]["status"], static_cast<uint8_t>(RideStatus::testing));
+
+    auto openAction = std::make_unique<GameActions::RideSetStatusAction>(ordinaryRide, RideStatus::open);
+    openAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+    gInUpdateCode = true;
+    const auto ordinaryOpen = GameActions::Execute(openAction.get(), ordinaryState);
+    gInUpdateCode = oldInUpdateCode;
+    ASSERT_EQ(ordinaryOpen.error, GameActions::Status::ok);
+    EXPECT_EQ(ordinaryOpen.expenditure, ExpenditureType::rideRunningCosts);
+    EXPECT_EQ(ordinaryOpen.cost, 0);
+    EXPECT_EQ(ordinaryOpen.position, (CoordsXYZ{ 432, 432, 112 }));
+    const auto ordinaryProjection = RideSetStatusOwnerProjection(ordinaryState, ordinaryRide);
+    ASSERT_EQ(ordinaryProjection["ride"]["status"], static_cast<uint8_t>(RideStatus::open));
+    EXPECT_NE(ordinaryProjection["ride"]["vehicles"], json_t::array());
+    EXPECT_EQ(ordinaryProjection["ride"]["vehicles"], ordinaryTestingProjection["ride"]["vehicles"]);
+
+    LoadEnterprisePark();
+    auto& publicState = OpenRCT2::getGameState();
+    const auto publicRide = BuildEnterpriseRide(publicState);
+    ASSERT_EQ(publicRide, ordinaryRide);
+    for (const auto& args : { testingArgs, openArgs })
+    {
+        const auto queried = QueryNativeAction("RideSetStatusAction", args, publicState);
+        ASSERT_TRUE(queried.ok) << queried.message;
+        EXPECT_EQ(
+            queried.value,
+            (json_t{ { "action", "RideSetStatusAction" },
+                     { "status", 0 },
+                     { "accepted", true },
+                     { "cost", 0 },
+                     { "position", { { "x", -32768 }, { "y", -32768 }, { "z", -32768 } } } }));
+        const auto executed = ExecuteNativeAction("RideSetStatusAction", args, publicState);
+        ASSERT_TRUE(executed.ok) << executed.message;
+        ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
+        const auto& donor = args["status"] == 2 ? ordinaryTesting : ordinaryOpen;
+        auto expected = RideSetStatusResultProjection(donor);
+        expected["action"] = "RideSetStatusAction";
+        EXPECT_EQ(executed.value, expected);
+    }
+    EXPECT_EQ(RideSetStatusOwnerProjection(publicState, publicRide), ordinaryProjection);
+}
+
+TEST_F(NativeActionContractRideSetStatus, RejectsMissingRideAndInvalidStatusWithoutMutation)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    const auto rideId = BuildEnterpriseRide(state);
+    auto missingRide = StatusArgs(rideId, 2);
+    missingRide["ride"] = 65535;
+    ExpectRejected(state, rideId, missingRide);
+
+    auto invalidStatus = StatusArgs(rideId, static_cast<uint8_t>(RideStatus::count));
+    ExpectRejected(state, rideId, invalidStatus);
+}
+
+TEST_F(NativeActionContractRideSetStatus, RejectsEachMissingEntranceOrExitForTestingAndOpenWithoutMutation)
+{
+    for (const auto status : { 1, 2 })
+    {
+        LoadEnterprisePark();
+        auto& entranceState = OpenRCT2::getGameState();
+        const auto entranceRide = BuildEnterpriseRide(entranceState);
+        RemoveEntrance(entranceState, entranceRide);
+        ExpectRejected(entranceState, entranceRide, StatusArgs(entranceRide, status));
+
+        LoadEnterprisePark();
+        auto& exitState = OpenRCT2::getGameState();
+        const auto exitRide = BuildEnterpriseRide(exitState);
+        RemoveExit(exitState, exitRide);
+        ExpectRejected(exitState, exitRide, StatusArgs(exitRide, status));
+    }
+}
+
+TEST_F(NativeActionContractRideSetStatus, RejectsMissingStationForTestingAndOpenWithoutMutation)
+{
+    for (const auto status : { 1, 2 })
+    {
+        LoadEnterprisePark();
+        auto& state = OpenRCT2::getGameState();
+        const auto rideId = BuildEnterpriseRide(state);
+        GetRide(rideId)->getStation(StationIndex::FromUnderlying(0)).Start = {};
+        ExpectRejected(state, rideId, StatusArgs(rideId, status));
+    }
+}
+
+TEST_F(NativeActionContractRideSetStatus, RejectsMissingStartElementForTestingAndOpenWithoutMutation)
+{
+    for (const auto status : { 1, 2 })
+    {
+        LoadEnterprisePark();
+        auto& state = OpenRCT2::getGameState();
+        const auto rideId = BuildEnterpriseRide(state);
+        GetRide(rideId)->getStation(StationIndex::FromUnderlying(0)).Start = { 64, 64 };
+        ExpectRejected(state, rideId, StatusArgs(rideId, status));
+    }
+}
+
+TEST_F(NativeActionContractRideSetStatus, ClosedStatusClearsOnlyBoundedReturnFields)
+{
+    LoadEnterprisePark();
+    auto& ordinaryState = OpenRCT2::getGameState();
+    const auto ordinaryRide = BuildEnterpriseRide(ordinaryState);
+    auto* ride = GetRide(ordinaryRide);
+    ride->flags.set(RideFlag::crashed, RideFlag::passStationNoStopping);
+    ride->currentIssues = 7;
+    ride->lastIssueTime = 11;
+    ride->measurement = std::make_unique<RideMeasurement>();
+    const auto args = StatusArgs(ordinaryRide, 0);
+    GameActions::RideSetStatusAction ordinaryAction(ordinaryRide, RideStatus::closed);
+    ordinaryAction.SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+    const auto oldInUpdateCode = gInUpdateCode;
+    gInUpdateCode = true;
+    const auto ordinaryResult = GameActions::Execute(&ordinaryAction, ordinaryState);
+    gInUpdateCode = oldInUpdateCode;
+    ASSERT_EQ(ordinaryResult.error, GameActions::Status::ok);
+    EXPECT_EQ(ordinaryResult.expenditure, ExpenditureType::rideRunningCosts);
+    EXPECT_EQ(ordinaryResult.cost, 0);
+    EXPECT_EQ(ordinaryResult.position, (CoordsXYZ{ 432, 432, 112 }));
+    const auto ordinaryProjection = RideSetStatusOwnerProjection(ordinaryState, ordinaryRide);
+    EXPECT_EQ(ordinaryProjection["ride"]["status"], 0);
+    EXPECT_FALSE(ordinaryProjection["ride"]["crashed"]);
+    EXPECT_FALSE(ordinaryProjection["ride"]["passStationNoStopping"]);
+    EXPECT_FALSE(ordinaryProjection["ride"]["measurement"]);
+
+    LoadEnterprisePark();
+    auto& publicState = OpenRCT2::getGameState();
+    const auto publicRide = BuildEnterpriseRide(publicState);
+    auto* publicRideState = GetRide(publicRide);
+    publicRideState->flags.set(RideFlag::crashed, RideFlag::passStationNoStopping);
+    publicRideState->currentIssues = 7;
+    publicRideState->lastIssueTime = 11;
+    publicRideState->measurement = std::make_unique<RideMeasurement>();
+    const auto queried = QueryNativeAction("RideSetStatusAction", args, publicState);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+    const auto executed = ExecuteNativeAction("RideSetStatusAction", args, publicState);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    auto expected = RideSetStatusResultProjection(ordinaryResult);
+    expected["action"] = "RideSetStatusAction";
+    EXPECT_EQ(executed.value, expected);
+    EXPECT_EQ(RideSetStatusOwnerProjection(publicState, publicRide), ordinaryProjection);
+}
+
+TEST_F(NativeActionContractRideSetStatus, ExecuteRequeriesRemovedEntranceAfterAcceptedQuery)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    const auto rideId = BuildEnterpriseRide(state);
+    const auto args = StatusArgs(rideId, 1);
+    const auto queried = QueryNativeAction("RideSetStatusAction", args, state);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+    RemoveEntrance(state, rideId);
+    const auto before = RideSetStatusOwnerProjection(state, rideId);
+    const auto executed = ExecuteNativeAction("RideSetStatusAction", args, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    EXPECT_EQ(executed.value, RideSetStatusRejectedResult(state, args));
+    EXPECT_EQ(RideSetStatusOwnerProjection(state, rideId), before);
+}
+
+TEST_F(NativeActionContractRideSetStatus, PublicSchemaHasExactlyRideAndStatusIntegerInputs)
+{
+    const auto actions = NativeActions();
+    const auto descriptor = std::find_if(
+        actions.begin(), actions.end(), [](const auto& action) { return action.name == "RideSetStatusAction"; });
+    ASSERT_NE(descriptor, actions.end());
+    ASSERT_TRUE(descriptor->schema["properties"].is_object());
+    EXPECT_EQ(descriptor->schema["properties"].size(), 2u);
+    EXPECT_EQ(descriptor->schema["properties"]["ride"], (json_t{ { "type", "integer" } }));
+    EXPECT_EQ(descriptor->schema["properties"]["status"], (json_t{ { "type", "integer" } }));
+    EXPECT_EQ(descriptor->schema["required"], (json_t{ "ride", "status" }));
 }
