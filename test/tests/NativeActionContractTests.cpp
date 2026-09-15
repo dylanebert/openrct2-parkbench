@@ -1766,7 +1766,7 @@ TEST_F(NativeActionContractRide, CreatePreservesExplicitSubtypeSelectionUntilOwn
     EXPECT_NE(RideListProjection(state), validBefore);
 }
 
-TEST_F(NativeActionContractRide, LifecycleSettingsPopulationAndConformance)
+TEST_F(NativeActionContractRide, ProvisionalRideInventoryAndRetainedEntranceConformance)
 {
     const auto fixtures = MakeRideFixtures();
     ASSERT_EQ(fixtures.size(), 11u);

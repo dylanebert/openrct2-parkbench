@@ -1,6 +1,5 @@
 #include "NativeActionContractRideProjection.h"
 
-#include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/entity/EntityList.h>
 #include <openrct2/entity/Guest.h>
 #include <openrct2/management/NewsItem.h>
@@ -134,6 +133,69 @@ namespace OpenRCT2::Testing
             };
         }
 
+        json_t SerializeTile(const TileCoordsXY& coords)
+        {
+            json_t elements = json_t::array();
+            auto* element = MapGetFirstElementAt(coords);
+            if (element != nullptr)
+            {
+                while (true)
+                {
+                    json_t bytes = json_t::array();
+                    const auto* raw = reinterpret_cast<const uint8_t*>(element);
+                    for (size_t i = 0; i < kTileElementSize; ++i)
+                        bytes.push_back(raw[i]);
+                    elements.push_back({
+                        { "type", static_cast<uint8_t>(element->getType()) },
+                        { "flags", element->flags },
+                        { "baseHeight", element->baseHeight },
+                        { "clearanceHeight", element->clearanceHeight },
+                        { "owner", element->owner },
+                        { "direction", static_cast<uint8_t>(element->getDirection()) },
+                        { "ride", element->GetRideIndex().ToUnderlying() },
+                        { "bytes", std::move(bytes) },
+                    });
+                    if (element->isLastForTile())
+                        break;
+                    ++element;
+                }
+            }
+            return { { "x", coords.x }, { "y", coords.y }, { "elements", std::move(elements) } };
+        }
+
+        json_t SerializeRide(const Ride& ride)
+        {
+            return {
+                { "id", ride.id.ToUnderlying() },
+                { "type", ride.type },
+                { "name", ride.getName() },
+                { "status", static_cast<uint8_t>(ride.status) },
+                { "stations", ride.numStations },
+                { "trains", ride.numTrains },
+                { "carsPerTrain", ride.numCarsPerTrain },
+                { "price", ride.price[0] },
+                { "price0", ride.price[0] },
+                { "price1", ride.price[1] },
+                { "value", ride.value },
+                { "ratings", {
+                      { "excitement", static_cast<int32_t>(ride.ratings.excitement) },
+                      { "intensity", static_cast<int32_t>(ride.ratings.intensity) },
+                      { "nausea", static_cast<int32_t>(ride.ratings.nausea) },
+                  } },
+                { "numRiders", ride.numRiders },
+                { "totalCustomers", ride.totalCustomers },
+                { "totalProfit", ride.totalProfit },
+                { "profit", ride.profit },
+                { "flags", ride.flags.holder },
+                { "everBeenOpened", ride.flags.has(RideFlag::everBeenOpened) },
+                { "lastCrashType", ride.lastCrashType },
+                { "reliability", ride.reliability },
+                { "reliabilityPercentage", ride.reliabilityPercentage },
+                { "breakdownReason", static_cast<uint8_t>(ride.breakdownReason) },
+                { "inspectionStation", ride.inspectionStation.ToUnderlying() },
+            };
+        }
+
         bool TileBelongsToRide(const TileCoordsXY& coords, int32_t rideValue)
         {
             auto* element = MapGetFirstElementAt(coords);
@@ -241,13 +303,9 @@ namespace OpenRCT2::Testing
         json_t tiles = json_t::array();
         for (const auto& coords : watch.tileCoords)
         {
-            // The resource is still read from the engine's tile elements; the
-            // fixed coordinate watch set, rather than a post-action scan, owns
-            // which complete ordered tile records are serialized.
-            const auto tile = CommandLine::ReadNativeResource(
-                "tile", { { "x", coords.x }, { "y", coords.y }, { "includePath", true }, { "includeElements", true } },
-                const_cast<GameState_t&>(state));
-            tiles.push_back(tile.ok ? tile.value : json_t{ { "x", coords.x }, { "y", coords.y }, { "error", tile.message } });
+            // The fixed coordinate watch set, rather than a post-action scan,
+            // owns which complete ordered tile records are serialized.
+            tiles.push_back(SerializeTile(coords));
         }
 
         json_t banners = json_t::array();
@@ -263,19 +321,13 @@ namespace OpenRCT2::Testing
         json_t rides = json_t::array();
         for (const auto id : watch.rideIds)
         {
-            if (id >= state.rides.size() || GetRide(RideId::FromUnderlying(id)) == nullptr)
+            if (id >= state.rides.size() || state.rides[id].id.IsNull())
             {
                 rides.push_back({ { "id", id }, { "exists", false } });
                 continue;
             }
-            const auto resource = CommandLine::ReadNativeResource("ride", { { "id", id } }, const_cast<GameState_t&>(state));
-            if (!resource.ok)
-            {
-                rides.push_back({ { "id", id }, { "error", resource.message } });
-                continue;
-            }
-            auto rideValue = resource.value;
             const auto& ride = state.rides[id];
+            auto rideValue = SerializeRide(ride);
             rideValue["price0"] = ride.price[0];
             rideValue["price1"] = ride.price[1];
             rideValue["trackColours"] = json_t::array();
@@ -308,7 +360,16 @@ namespace OpenRCT2::Testing
                 { "ride", campaign.rideId.ToUnderlying() },
             });
 
-        const auto finance = CommandLine::ReadNativeResource("finance", {}, const_cast<GameState_t&>(state));
+        const auto& park = state.park;
+        const json_t finance = {
+            { "cash", park.cash },
+            { "bankLoan", park.bankLoan },
+            { "maxBankLoan", park.maxBankLoan },
+            { "loanInterestRate", park.bankLoanInterestRate },
+            { "currentProfit", park.currentProfit },
+            { "currentExpenditure", park.currentExpenditure },
+            { "companyValue", park.companyValue },
+        };
         return {
             { "watch", {
                   { "rides", watch.rideIds }, { "vehicles", watch.vehicleIds }, { "guests", watch.guestIds },
@@ -322,7 +383,7 @@ namespace OpenRCT2::Testing
             { "banners", std::move(banners) },
             { "campaigns", std::move(campaigns) },
             { "tiles", std::move(tiles) },
-            { "finance", finance.ok ? finance.value : json_t{ { "error", finance.message } } },
+            { "finance", finance },
             { "parkValue", state.park.value },
             { "selectedRide", args.value("ride", -1) },
         };
