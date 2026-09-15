@@ -160,7 +160,11 @@ namespace
         int32_t count;
     };
 
-    using DeltaRelation = std::variant<IntegerAdd, ReplaceLiteral, EndpointFromArguments, InsertedEntranceElement>;
+    struct ClearQueueHead
+    {
+    };
+
+    using DeltaRelation = std::variant<IntegerAdd, ReplaceLiteral, EndpointFromArguments, InsertedEntranceElement, ClearQueueHead>;
 
     struct NamedFieldDelta
     {
@@ -541,7 +545,7 @@ namespace
                 const auto& afterValue = after.at(delta.path);
                 const auto argument = [&args](ArgumentKey key) -> const json_t& { return args.at(ArgumentKeyName(key)); };
                 const auto result = std::visit(
-                    [&beforeValue, &afterValue, &args, &argument](const auto& relation) -> bool {
+                    [&before, &beforeValue, &afterValue, &args, &argument](const auto& relation) -> bool {
                         using Relation = std::decay_t<decltype(relation)>;
                         if constexpr (std::is_same_v<Relation, IntegerAdd>)
                         {
@@ -562,6 +566,11 @@ namespace
                                     == argument(relation.y).template get<int32_t>() / kCoordsXYStep
                                 && afterValue.value("direction", 255) == argument(relation.direction).template get<uint8_t>()
                                 && afterValue.contains("z") && afterValue.value("z", -1) == afterValue.value("stationBaseZ", -2);
+                        }
+                        else if constexpr (std::is_same_v<Relation, ClearQueueHead>)
+                        {
+                            return !beforeValue.is_null() && afterValue.is_null()
+                                && beforeValue == before.at("watch").at("fixtureIds").at("queueGuest");
                         }
                         else if constexpr (std::is_same_v<Relation, InsertedEntranceElement>)
                         {
@@ -775,7 +784,7 @@ namespace
         auto* banner = CreateBanner();
         if (banner == nullptr)
             return fail("no banner store capacity");
-        banner->type = 0;
+        banner->type = 1;
         banner->flags.set(BannerFlag::linkedToRide);
         banner->rideIndex = rideId;
         banner->text = "S2 target banner";
@@ -793,7 +802,7 @@ namespace
         linkedGuest->CurrentRideStation = StationIndex::FromUnderlying(0);
         linkedGuest->CurrentTrain = 0;
         linkedGuest->CurrentCar = 0;
-        linkedGuest->CurrentSeat = 73;
+        linkedGuest->CurrentSeat = 0;
         linkedGuest->TimeToStand = 73;
         linkedGuest->guestNextInQueue = queueGuest->id;
         linkedGuest->timeInQueue = 37;
@@ -831,15 +840,20 @@ namespace
         tail->SubType = Vehicle::Type::tail;
         head->ride = tail->ride = rideId;
         head->next_vehicle_on_train = tail->id;
+        head->prev_vehicle_on_ride = EntityId::GetNull();
         head->next_vehicle_on_ride = tail->id;
+        tail->next_vehicle_on_train = EntityId::GetNull();
         tail->prev_vehicle_on_ride = head->id;
+        tail->next_vehicle_on_ride = EntityId::GetNull();
         head->status = Vehicle::Status::waitingForPassengers;
         tail->status = Vehicle::Status::travelling;
         head->num_seats = tail->num_seats = 2;
-        head->num_peeps = tail->num_peeps = 1;
-        head->next_free_seat = tail->next_free_seat = 1;
+        head->num_peeps = 1;
+        tail->num_peeps = 0;
+        head->next_free_seat = 1;
+        tail->next_free_seat = 0;
         head->peep[0] = linkedGuest->id;
-        tail->peep[0] = queueGuest->id;
+        tail->peep[0] = EntityId::GetNull();
         head->colours = { Drawing::Colour::brightRed, Drawing::Colour::darkBlue, Drawing::Colour::brightGreen };
         tail->colours = { Drawing::Colour::yellow, Drawing::Colour::brightPurple, Drawing::Colour::lightOrange };
         head->flags.set(VehicleFlag::testing);
@@ -851,7 +865,7 @@ namespace
         head->restraints_position = 17;
         tail->restraints_position = 29;
         ride->vehicles[0] = head->id;
-        ride->vehicles[1] = tail->id;
+        ride->vehicles[1] = EntityId::GetNull();
         ride->numTrains = 1;
         ride->numCarsPerTrain = 2;
         ride->maxTrains = std::max<uint8_t>(ride->maxTrains, 2);
@@ -859,6 +873,31 @@ namespace
         station.LastPeepInQueue = queueGuest->id;
         station.QueueLength = 37;
         station.QueueTime = 37;
+        ride->satisfaction = 17;
+        ride->popularity = 18;
+        ride->upkeepCost = 19;
+        ride->unreliabilityFactor = 20;
+        ride->incomePerHour = 21;
+        ride->music = 1;
+        ride->musicTuneId = 2;
+        ride->musicPosition = 3;
+        ride->windowInvalidateFlags.set(RideInvalidateFlag::music);
+        if (ride->measurement == nullptr)
+            ride->measurement = std::make_unique<RideMeasurement>();
+        if (auto* measurement = ride->measurement.get(); measurement != nullptr)
+        {
+            measurement->num_items = 2;
+            measurement->current_item = 1;
+            measurement->last_use_tick = 44;
+            measurement->vertical[0] = 1;
+            measurement->vertical[1] = -2;
+            measurement->lateral[0] = 3;
+            measurement->lateral[1] = -4;
+            measurement->velocity[0] = 5;
+            measurement->velocity[1] = 6;
+            measurement->altitude[0] = 7;
+            measurement->altitude[1] = 8;
+        }
 
         std::array<std::optional<TileCoordsXY>, 4> tileRoles;
         for (int32_t x = 0; x < state.mapSize.x; ++x)
@@ -948,6 +987,14 @@ namespace
         if (Park::CalculateParkValue(state.park, state) == 12345)
             return fail("calculated park value did not differ from stored witness");
         OpenRCT2::Testing::SetProjectionFixtureHandles(handles);
+        OpenRCT2::Testing::ClearRideProjectionWatchSet();
+        const json_t fixtureArgs{ { "ride", rideId.ToUnderlying() } };
+        auto watch = OpenRCT2::Testing::CaptureRideProjectionWatchSet(state, fixtureArgs);
+        OpenRCT2::Testing::SetRideProjectionWatchSet(watch);
+        const auto readback = OpenRCT2::Testing::SerializeRideProjection(state, fixtureArgs, watch);
+        std::string contractFailure;
+        if (!OpenRCT2::Testing::ValidateRideProjectionStores(readback, &contractFailure))
+            return fail("fixture readback contract failed: " + contractFailure);
         gProjectionFixtureFailure.clear();
         result.handles = handles;
         return result;
@@ -2098,9 +2145,28 @@ namespace
                 if (auto* ride = GetRide(rideId); ride != nullptr)
                 {
                     auto& stationData = ride->getStation(station);
-                    stationData.LastPeepInQueue = EntityId::FromUnderlying(1);
                     stationData.QueueLength = 37;
-                    stationData.QueueTime = 19;
+                    stationData.QueueTime = 37;
+                }
+                for (int32_t x = 0; x < state.mapSize.x; ++x)
+                {
+                    for (int32_t y = 0; y < state.mapSize.y; ++y)
+                    {
+                        auto* element = MapGetFirstElementAt(TileCoordsXY{ x, y });
+                        if (element == nullptr)
+                            continue;
+                        while (true)
+                        {
+                            if (auto* path = element->asPath(); path != nullptr && path->IsQueue())
+                            {
+                                path->SetRideIndex(rideId);
+                                path->SetStationIndex(station);
+                            }
+                            if (element->isLastForTile())
+                                break;
+                            ++element;
+                        }
+                    }
                 }
             };
             fixture.semanticInvalidPartitions = {
@@ -2270,7 +2336,7 @@ namespace
                   { { "/tileElements", IntegerAdd{ 1 } },
                     { "/endpoint", EndpointFromArguments{ ArgumentKey::x, ArgumentKey::y, ArgumentKey::direction } },
                     { "/insertedElement", InsertedEntranceElement{ false, 1 } },
-                    { "/queueLastPeep", ReplaceLiteral{ json_t(1), json_t(nullptr) } },
+                    { "/queueLastPeep", ClearQueueHead{} },
                     { "/queueLength", ReplaceLiteral{ json_t(37), json_t(0) } } } },
                 { "place-exit",
                   [exitArgs] { return *exitArgs; },
@@ -2397,6 +2463,7 @@ namespace
                 auto& state = OpenRCT2::getGameState();
                 gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(state);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(state);
                 if (!gProjectionFixtureFailure.empty())
                 {
                     failure = gProjectionFixtureFailure;
@@ -2405,6 +2472,7 @@ namespace
                 const auto acceptedArgs = acceptedIt->args();
                 if (acceptedIt->prepareState)
                     acceptedIt->prepareState(state, acceptedArgs);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(state);
                 if (acceptedArgs.empty())
                 {
                     failure = "accepted fixture case has empty args: " + acceptedIt->name;
@@ -2630,6 +2698,7 @@ namespace
                 auto& staleState = OpenRCT2::getGameState();
                 gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(staleState);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(staleState);
                 if (!gProjectionFixtureFailure.empty())
                 {
                     failure = gProjectionFixtureFailure;
@@ -2660,6 +2729,7 @@ namespace
                 OpenRCT2::Testing::SetRideProjectionWatchSet(
                     OpenRCT2::Testing::CaptureRideProjectionWatchSet(staleState, staleArgs));
                 staleCase.mutate(staleState, staleArgs);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(staleState);
                 const auto staleBefore = fixture.rejectionProjection(staleState, staleArgs);
                 if (fixture.projectionContract)
                 {
@@ -2721,6 +2791,7 @@ namespace
                 auto& ordinaryState = OpenRCT2::getGameState();
                 gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(ordinaryState);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(ordinaryState);
                 if (!gProjectionFixtureFailure.empty())
                 {
                     failure = gProjectionFixtureFailure;
@@ -2729,6 +2800,7 @@ namespace
                 const auto ordinaryArgs = acceptedCase.args();
                 if (acceptedCase.prepareState)
                     acceptedCase.prepareState(ordinaryState, ordinaryArgs);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(ordinaryState);
                 if (ordinaryArgs.empty())
                 {
                     failure = "accepted case has empty args: " + acceptedCase.name;
@@ -2790,6 +2862,7 @@ namespace
                 auto& publicState = OpenRCT2::getGameState();
                 gProjectionFixtureFailure.clear();
                 fixture.prepareLegalState(publicState);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(publicState);
                 if (!gProjectionFixtureFailure.empty())
                 {
                     failure = gProjectionFixtureFailure;
@@ -2798,6 +2871,7 @@ namespace
                 const auto publicArgs = acceptedCase.args();
                 if (acceptedCase.prepareState)
                     acceptedCase.prepareState(publicState, publicArgs);
+                OpenRCT2::Testing::ApplyProjectionFixtureMutation(publicState);
                 OpenRCT2::Testing::SetRideProjectionWatchSet(
                     OpenRCT2::Testing::CaptureRideProjectionWatchSet(publicState, publicArgs));
                 const auto publicPre = fixture.acceptedPostStateProjection(publicState, publicArgs);
@@ -3296,7 +3370,7 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
     EXPECT_EQ(head->at("trainLink"), handles.vehicleTail.ToUnderlying());
     EXPECT_EQ(tail->at("previousRideLink"), handles.vehicleHead.ToUnderlying());
     EXPECT_EQ(head->at("occupantCount"), 1);
-    EXPECT_EQ(tail->at("occupantCount"), 1);
+    EXPECT_EQ(tail->at("occupantCount"), 0);
     EXPECT_EQ(projection["finance"]["cash"], 100000);
     EXPECT_EQ(projection["finance"]["bankLoan"], 20000);
     EXPECT_EQ(projection["finance"]["maxBankLoan"], 50000);
@@ -3321,62 +3395,26 @@ TEST_F(NativeActionContractHarness, SerializesBoundedAuthoritativeStores)
 
 TEST_F(NativeActionContractHarness, PopulatedProjectionIdentityAndFieldMutationsRed)
 {
-    const std::vector<std::pair<std::string, std::function<void(json_t&)>>> mutations{
-        { "linked guest", [](json_t& projection) {
-             const auto id = projection["watch"]["fixtureIds"]["linkedGuest"].get<uint16_t>();
-             auto& guests = projection["guests"];
-             guests.erase(std::remove_if(guests.begin(), guests.end(), [id](const auto& guest) {
-                               return guest.value("id", std::numeric_limits<uint16_t>::max()) == id;
-                           }),
-                          guests.end());
-         } },
-        { "tail vehicle", [](json_t& projection) {
-             const auto id = projection["watch"]["fixtureIds"]["vehicleTail"].get<uint16_t>();
-             auto& vehicles = projection["vehicles"];
-             vehicles.erase(std::remove_if(vehicles.begin(), vehicles.end(), [id](const auto& vehicle) {
-                                 return vehicle.value("id", std::numeric_limits<uint16_t>::max()) == id;
-                             }),
-                            vehicles.end());
-         } },
-        { "campaign type", [](json_t& projection) {
-             for (auto& campaign : projection["campaigns"])
-             {
-                 if (campaign.value("ride", std::numeric_limits<uint16_t>::max())
-                     == projection["watch"]["fixtureIds"]["campaignRide"].get<uint16_t>())
-                     campaign["type"] = 0;
-             }
-         } },
-        { "banner linkage", [](json_t& projection) {
-             for (auto& banner : projection["banners"])
-                 if (banner.value("id", std::numeric_limits<uint16_t>::max())
-                     == projection["watch"]["fixtureIds"]["banner"].get<uint16_t>())
-                     banner["linkedToRide"] = false;
-         } },
-        { "voucher and photo flags", [](json_t& projection) {
-             for (auto& guest : projection["guests"])
-                 if (guest.value("id", std::numeric_limits<uint16_t>::max())
-                     == projection["watch"]["fixtureIds"]["linkedGuest"].get<uint16_t>())
-                     guest["itemFlags"] = 0;
-         } },
-        { "aliased tile roles", [](json_t& projection) {
-             projection["watch"]["tileRoles"][1] = projection["watch"]["tileRoles"][0];
-         } },
-        { "unwatched removed entrance", [](json_t& projection) {
-             projection["watch"]["tileRoles"].erase(projection["watch"]["tileRoles"].begin() + 1);
-         } },
+    const std::vector<std::pair<std::string, OpenRCT2::Testing::ProjectionFixtureMutation>> mutations{
+        { "linked guest", OpenRCT2::Testing::ProjectionFixtureMutation::removeLinkedGuest },
+        { "tail vehicle", OpenRCT2::Testing::ProjectionFixtureMutation::removeTailVehicle },
+        { "reciprocal vehicle link", OpenRCT2::Testing::ProjectionFixtureMutation::breakVehicleReciprocalLink },
+        { "campaign type", OpenRCT2::Testing::ProjectionFixtureMutation::alterCampaignType },
+        { "banner linkage", OpenRCT2::Testing::ProjectionFixtureMutation::clearBannerLink },
+        { "voucher and photo flags", OpenRCT2::Testing::ProjectionFixtureMutation::clearGuestItemFlags },
+        { "aliased queue and exit roles", OpenRCT2::Testing::ProjectionFixtureMutation::aliasQueueAndExitTiles },
+        { "unwatched removed entrance", OpenRCT2::Testing::ProjectionFixtureMutation::omitRemovedEntranceWatch },
+        { "queue time", OpenRCT2::Testing::ProjectionFixtureMutation::alterQueueTime },
+        { "banner position", OpenRCT2::Testing::ProjectionFixtureMutation::alterBannerPosition },
     };
-    for (const auto& [name, mutate] : mutations)
+    for (const auto& [name, mutation] : mutations)
     {
         auto fixture = MakeEntranceFixture();
-        const auto original = fixture.rejectionProjection;
-        fixture.rejectionProjection = [original, mutate](const GameState_t& state, const json_t& args) {
-            auto projection = original(state, args);
-            mutate(projection);
-            return projection;
-        };
+        OpenRCT2::Testing::SetProjectionFixtureMutation(mutation);
         std::string failure;
         EXPECT_FALSE(RunFixture(fixture, failure)) << name;
         EXPECT_FALSE(failure.empty()) << name;
+        OpenRCT2::Testing::ClearProjectionFixtureMutation();
     }
 }
 
@@ -3384,40 +3422,29 @@ TEST_F(NativeActionContractHarness, PopulatedProjectionRequiredFieldMutationsRed
 {
     const std::vector<std::string> rideFields{
         "maxTrains", "vehicleChangeTimeout", "inspectionInterval", "fixedRatings", "cableLift", "music", "musicEnabled",
+        "satisfaction", "popularity", "upkeepCost", "unreliabilityFactor", "incomePerHour", "measurement",
+        "music.invalidation",
     };
     for (const auto& field : rideFields)
     {
         auto fixture = MakeEntranceFixture();
-        const auto original = fixture.rejectionProjection;
-        fixture.rejectionProjection = [original, field](const GameState_t& state, const json_t& args) {
-            auto projection = original(state, args);
-            const auto id = projection["watch"]["fixtureIds"]["ride"].get<uint16_t>();
-            for (auto& ride : projection["rides"])
-                if (ride.value("id", std::numeric_limits<uint16_t>::max()) == id)
-                    ride.erase(field);
-            return projection;
-        };
+        const auto omission = field == "music.invalidation" ? "ride.music.invalidation" : "ride." + field;
+        OpenRCT2::Testing::SetProjectionSerializerOmission(omission);
         std::string failure;
         EXPECT_FALSE(RunFixture(fixture, failure)) << field;
-        EXPECT_NE(failure.find("ride field is omitted"), std::string::npos) << field << ": " << failure;
+        EXPECT_FALSE(failure.empty()) << field;
+        OpenRCT2::Testing::ClearProjectionSerializerOmission();
     }
-    for (const auto& [label, mutate] : std::vector<std::pair<std::string, std::function<void(json_t&)>>>{
-             { "expenditure", [](json_t& projection) {
-                  projection["finance"]["expenditureTable"][0].erase(static_cast<size_t>(ExpenditureType::rideConstruction));
-              } },
-             { "value history", [](json_t& projection) { projection["finance"]["valueHistory"].erase(0); } },
-         })
+    for (const auto& field : { std::string("ride.station.QueueTime"), std::string("tile.track.ride"),
+                               std::string("tile.entrance.direction"), std::string("tile.queue.edges"),
+                               std::string("finance.expenditureTable[0][rideConstruction]"), std::string("finance.valueHistory[7]") })
     {
         auto fixture = MakeEntranceFixture();
-        const auto original = fixture.rejectionProjection;
-        fixture.rejectionProjection = [original, mutate](const GameState_t& state, const json_t& args) {
-            auto projection = original(state, args);
-            mutate(projection);
-            return projection;
-        };
+        OpenRCT2::Testing::SetProjectionSerializerOmission(field);
         std::string failure;
-        EXPECT_FALSE(RunFixture(fixture, failure)) << label;
-        EXPECT_FALSE(failure.empty()) << label;
+        EXPECT_FALSE(RunFixture(fixture, failure)) << field;
+        EXPECT_FALSE(failure.empty()) << field;
+        OpenRCT2::Testing::ClearProjectionSerializerOmission();
     }
 }
 

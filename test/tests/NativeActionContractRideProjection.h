@@ -65,6 +65,28 @@ namespace OpenRCT2::Testing
         std::string failure;
     };
 
+    enum class ProjectionFixtureMutation : uint8_t
+    {
+        none,
+        removeLinkedGuest,
+        removeTailVehicle,
+        breakVehicleReciprocalLink,
+        alterCampaignType,
+        clearBannerLink,
+        clearGuestItemFlags,
+        aliasQueueAndExitTiles,
+        omitRemovedEntranceWatch,
+        alterQueueTime,
+        alterBannerPosition,
+    };
+
+    void SetProjectionFixtureMutation(ProjectionFixtureMutation mutation);
+    void ClearProjectionFixtureMutation();
+    void ApplyProjectionFixtureMutation(GameState_t& state);
+
+    void SetProjectionSerializerOmission(std::string field);
+    void ClearProjectionSerializerOmission();
+
     struct RideProjectionWatchSet
     {
         std::set<uint16_t> rideIds;
