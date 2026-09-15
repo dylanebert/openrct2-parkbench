@@ -167,6 +167,15 @@ namespace OpenRCT2::GameActions
             return Result(Status::invalidParameters, errTitle, STR_ERR_RIDE_NOT_FOUND);
         }
 
+        // Execute can be called directly by engine owners as well as through
+        // the synchronous dispatcher. Reject a stale/missing current entry
+        // before any branch clears vehicles, guests, seats, or queue links.
+        if (GetRideEntryByIndex(ride->subtype) == nullptr)
+        {
+            LOG_ERROR("Ride entry not found for index %d", ride->subtype);
+            return Result(Status::invalidParameters, errTitle, STR_ERR_VALUE_OUT_OF_RANGE);
+        }
+
         switch (_type)
         {
             case RideSetVehicleType::numTrains:
