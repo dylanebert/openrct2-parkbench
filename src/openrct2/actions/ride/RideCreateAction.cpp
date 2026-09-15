@@ -113,6 +113,12 @@ namespace OpenRCT2::GameActions
             return Result(Status::invalidParameters, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_UNKNOWN_OBJECT_TYPE);
         }
 
+        if (std::ranges::find(rideEntry->ride_type, _rideType) == std::end(rideEntry->ride_type))
+        {
+            LOG_ERROR("Ride entry %d is incompatible with ride type %d", rideEntryIndex, _rideType);
+            return Result(Status::invalidParameters, STR_CANT_CREATE_NEW_RIDE_ATTRACTION, STR_INVALID_RIDE_TYPE);
+        }
+
         const auto* presetList = rideEntry->vehicle_preset_list;
         if ((presetList->count > 0 && presetList->count != 255) && _vehicleColourPreset >= presetList->count)
         {
