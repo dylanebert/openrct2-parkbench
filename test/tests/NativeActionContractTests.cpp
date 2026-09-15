@@ -27,14 +27,19 @@
 #include <openrct2/actions/ride/RideCreateAction.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
+#include <openrct2/actions/track/TrackPlaceAction.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/localisation/StringIds.h>
 #include <openrct2/management/Research.h>
 #include <openrct2/object/Object.h>
 #include <openrct2/object/ObjectManager.h>
 #include <openrct2/ride/Ride.h>
+#include <openrct2/ride/RideColour.h>
 #include <openrct2/ride/RideData.h>
+#include <openrct2/ride/Track.h>
+#include <openrct2/ride/ted/TrackElemType.h>
 #include <openrct2/world/Map.h>
+#include <openrct2/world/tile_element/TrackElement.h>
 #include <set>
 #include <sstream>
 #include <string>
@@ -1253,4 +1258,438 @@ TEST(NativeActionContractHarnessMutations, UncoveredSemanticParameterRed)
     observation.semanticPartitions = { "x" };
     const auto failure = ValidateHarnessObservation(observation);
     EXPECT_NE(failure.find("uncovered semantic parameter: ride"), std::string::npos);
+}
+
+namespace
+{
+    constexpr int32_t kTrackOriginX = 320;
+    constexpr int32_t kTrackOriginY = 320;
+    constexpr int32_t kTrackOriginZ = 16;
+    constexpr uint8_t kTrackColour = 2;
+    constexpr uint8_t kSeatRotation = 4;
+
+    json_t TrackPlaceArgs(RideId ride)
+    {
+        return {
+            { "x", kTrackOriginX },
+            { "y", kTrackOriginY },
+            { "z", kTrackOriginZ },
+            { "direction", 0 },
+            { "ride", ride.ToUnderlying() },
+            { "trackType", static_cast<uint16_t>(TrackElemType::flatTrack4x4) },
+            { "rideType", static_cast<ride_type_t>(81) },
+            { "brakeSpeed", 0 },
+            { "colour", kTrackColour },
+            { "seatRotation", kSeatRotation },
+            { "trackPlaceFlags", 0 },
+            { "isFromTrackDesign", false },
+        };
+    }
+
+    json_t TrackPlaceResultProjection(const GameActions::Result& result)
+    {
+        return {
+            { "status", static_cast<uint16_t>(result.error) },
+            { "accepted", result.error == GameActions::Status::ok },
+            { "cost", result.cost },
+            { "position", { { "x", result.position.x }, { "y", result.position.y }, { "z", result.position.z } } },
+        };
+    }
+
+    json_t TrackPlaceRejectedResult(GameActions::Status status, StringId title, StringId message, std::string_view code)
+    {
+        const GameActions::Result expected(status, title, message);
+        auto result = TrackPlaceResultProjection(expected);
+        result["action"] = "TrackPlaceAction";
+        result["rejection"] = {
+            { "code", code },
+            { "title", expected.getErrorTitle() },
+            { "message", expected.getErrorMessage() },
+            { "detail", { { "status", static_cast<uint16_t>(status) } } },
+        };
+        return result;
+    }
+
+    json_t TrackElementProjection(const TrackElement& element)
+    {
+        return {
+            { "baseZ", element.getBaseZ() },
+            { "clearanceZ", element.getClearanceZ() },
+            { "direction", static_cast<uint8_t>(element.getDirection()) },
+            { "ghost", element.isGhost() },
+            { "ride", element.GetRideIndex().ToUnderlying() },
+            { "rideType", element.GetRideType() },
+            { "trackType", static_cast<uint16_t>(element.GetTrackType()) },
+            { "sequence", element.GetSequenceIndex() },
+            { "station", element.GetStationIndex().ToUnderlying() },
+            { "colour", element.GetColourScheme() },
+            { "seatRotation", element.GetSeatRotation() },
+            { "brakeSpeed", element.GetBrakeBoosterSpeed() },
+            { "chain", element.HasChain() },
+            { "inverted", element.IsInverted() },
+        };
+    }
+
+    json_t TrackTileProjection(const CoordsXY& location)
+    {
+        json_t elements = json_t::array();
+        auto* element = MapGetFirstElementAt(location);
+        while (element != nullptr)
+        {
+            json_t value = {
+                { "type", static_cast<uint8_t>(element->getType()) },
+                { "baseZ", element->getBaseZ() },
+                { "clearanceZ", element->getClearanceZ() },
+                { "direction", static_cast<uint8_t>(element->getDirection()) },
+                { "ghost", element->isGhost() },
+            };
+            if (const auto* track = element->asTrack())
+                value["track"] = TrackElementProjection(*track);
+            elements.push_back(std::move(value));
+            if (element->isLastForTile())
+                break;
+            ++element;
+        }
+        return elements;
+    }
+
+    json_t TrackPlaceProjection(const GameState_t& state, RideId rideId)
+    {
+        const auto* ride = GetRide(rideId);
+        json_t projection = {
+            { "cash", state.park.cash },
+            { "tiles", json_t::array() },
+        };
+        if (ride == nullptr)
+        {
+            projection["ride"] = nullptr;
+            return projection;
+        }
+
+        const auto station = ride->getStation(StationIndex::FromUnderlying(0));
+        projection["ride"] = {
+            { "overallView",
+              ride->overallView.IsNull() ? json_t(nullptr)
+                                         : json_t{ { "x", ride->overallView.x }, { "y", ride->overallView.y } } },
+            { "numStations", ride->numStations },
+            { "station0",
+              { { "startX", station.Start.x },
+                { "startY", station.Start.y },
+                { "height", station.Height },
+                { "length", station.Length },
+                { "depart", station.Depart } } },
+            { "numTrains", ride->numTrains },
+            { "maxTrains", ride->maxTrains },
+            { "numCarsPerTrain", ride->numCarsPerTrain },
+            { "minCarsPerTrain", ride->minCarsPerTrain },
+            { "maxCarsPerTrain", ride->maxCarsPerTrain },
+        };
+
+        auto& tiles = projection["tiles"];
+        for (const auto& offset :
+             std::array<CoordsXY, 16>{ CoordsXY{ 0, 0 }, CoordsXY{ 0, 32 }, CoordsXY{ 0, 64 }, CoordsXY{ 0, 96 },
+                                       CoordsXY{ 32, 0 }, CoordsXY{ 32, 32 }, CoordsXY{ 32, 64 }, CoordsXY{ 32, 96 },
+                                       CoordsXY{ 64, 0 }, CoordsXY{ 64, 32 }, CoordsXY{ 64, 64 }, CoordsXY{ 64, 96 },
+                                       CoordsXY{ 96, 0 }, CoordsXY{ 96, 32 }, CoordsXY{ 96, 64 }, CoordsXY{ 96, 96 } })
+        {
+            const CoordsXY location{ kTrackOriginX + offset.x, kTrackOriginY + offset.y };
+            tiles.push_back({ { "x", location.x }, { "y", location.y }, { "elements", TrackTileProjection(location) } });
+        }
+        return projection;
+    }
+
+    class NativeActionContractTrackPlace : public NativeActionContractHarness
+    {
+    protected:
+        void LoadEnterprisePark()
+        {
+            LoadPark("small_park_with_ferris_wheel.sv6");
+            auto& objectManager = GetContext()->GetObjectManager();
+            std::vector<ObjectEntryDescriptor> unload;
+            if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, 10); object != nullptr)
+                unload.push_back(object->GetDescriptor());
+            const auto enterpriseSlot = objectManager.GetLoadedObjectEntryIndex("rct2.ride.enterp");
+            if (enterpriseSlot != kObjectEntryIndexNull && enterpriseSlot != 10)
+            {
+                if (auto* object = objectManager.GetLoadedObject(ObjectType::ride, enterpriseSlot); object != nullptr)
+                    unload.push_back(object->GetDescriptor());
+            }
+            if (!unload.empty())
+                objectManager.UnloadObjects(unload);
+            ASSERT_NE(objectManager.LoadObject(ObjectEntryDescriptor("rct2.ride.enterp"), 10), nullptr);
+            ASSERT_NE(GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10)), nullptr);
+            ASSERT_EQ(
+                GetRideEntryByIndex(static_cast<ObjectEntryIndex>(10))->GetFirstNonNullRideType(),
+                static_cast<ride_type_t>(81));
+        }
+
+        RideId CreateEnterpriseRide(GameState_t& state)
+        {
+            state.cheats.sandboxMode = true;
+            state.cheats.disableClearanceChecks = true;
+            const auto rideId = GetNextFreeRideId();
+            const auto created = ExecuteNativeAction("RideCreateAction", RideCreateArgs(), state);
+            if (!created.ok || !created.value.value("accepted", false))
+            {
+                ADD_FAILURE() << (created.ok ? created.value.dump() : created.message);
+                return RideId::GetNull();
+            }
+            auto* ride = GetRide(rideId);
+            if (ride == nullptr || ride->type != static_cast<ride_type_t>(81)
+                || ride->subtype != static_cast<ObjectEntryIndex>(10))
+            {
+                ADD_FAILURE() << "Enterprise ride was not created in the expected slot and type";
+                return RideId::GetNull();
+            }
+            ride->status = RideStatus::closed;
+            ride->overallView = {};
+            return rideId;
+        }
+
+        void PrepareLegalState(GameState_t& state, RideId& rideId, json_t& args)
+        {
+            rideId = CreateEnterpriseRide(state);
+            args = TrackPlaceArgs(rideId);
+            ASSERT_GT(state.mapSize.x, 12);
+            ASSERT_GT(state.mapSize.y, 12);
+        }
+
+        void ExpectRejected(
+            GameState_t& state, RideId rideId, const json_t& legalArgs, const json_t& invalidArgs, GameActions::Status status,
+            StringId message)
+        {
+            const auto expected = TrackPlaceRejectedResult(
+                status, STR_RIDE_CONSTRUCTION_CANT_CONSTRUCT_THIS_HERE, message,
+                status == GameActions::Status::noClearance ? "no_clearance" : "invalid_parameters");
+            const auto before = TrackPlaceProjection(state, rideId);
+            const auto queried = QueryNativeAction("TrackPlaceAction", invalidArgs, state);
+            ASSERT_TRUE(queried.ok) << queried.message;
+            EXPECT_EQ(queried.value, expected);
+            EXPECT_EQ(TrackPlaceProjection(state, rideId), before);
+            const auto executed = ExecuteNativeAction("TrackPlaceAction", invalidArgs, state);
+            ASSERT_TRUE(executed.ok) << executed.message;
+            EXPECT_EQ(executed.value, expected);
+            EXPECT_EQ(TrackPlaceProjection(state, rideId), before);
+            (void)legalArgs;
+        }
+    };
+} // namespace
+
+TEST_F(NativeActionContractTrackPlace, AcceptedEnterpriseFlatTrackHasLiteralResultAndTouchedFields)
+{
+    LoadEnterprisePark();
+    auto& ordinaryState = OpenRCT2::getGameState();
+    RideId ordinaryRide{};
+    json_t ordinaryArgs;
+    PrepareLegalState(ordinaryState, ordinaryRide, ordinaryArgs);
+    auto ordinaryAction = std::make_unique<GameActions::TrackPlaceAction>(
+        ordinaryRide, TrackElemType::flatTrack4x4, static_cast<ride_type_t>(81),
+        CoordsXYZD{ kTrackOriginX, kTrackOriginY, kTrackOriginZ, static_cast<Direction>(0) }, 0, kTrackColour, kSeatRotation,
+        SelectedLiftAndInverted{}, false);
+    ordinaryAction->SetFlags({ GameActions::CommandFlag::apply, GameActions::CommandFlag::allowDuringPaused });
+    const auto ordinaryCashBefore = ordinaryState.park.cash;
+    const auto oldInUpdateCode = gInUpdateCode;
+    gInUpdateCode = true;
+    const auto ordinaryResult = GameActions::Execute(ordinaryAction.get(), ordinaryState);
+    gInUpdateCode = oldInUpdateCode;
+    ASSERT_EQ(ordinaryResult.error, GameActions::Status::ok);
+    EXPECT_EQ(ordinaryResult.expenditure, ExpenditureType::rideConstruction);
+    EXPECT_EQ(ordinaryResult.cost, 8800);
+    EXPECT_EQ(ordinaryResult.position.x, 336);
+    EXPECT_EQ(ordinaryResult.position.y, 336);
+    EXPECT_EQ(ordinaryResult.position.z, 16);
+    EXPECT_EQ(ordinaryState.park.cash - ordinaryCashBefore, -8800);
+    const auto ordinaryProjection = TrackPlaceProjection(ordinaryState, ordinaryRide);
+
+    LoadEnterprisePark();
+    auto& publicState = OpenRCT2::getGameState();
+    RideId publicRide{};
+    json_t publicArgs;
+    PrepareLegalState(publicState, publicRide, publicArgs);
+    ASSERT_EQ(publicRide, ordinaryRide);
+    const auto publicCashBefore = publicState.park.cash;
+    const auto queried = QueryNativeAction("TrackPlaceAction", publicArgs, publicState);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    EXPECT_EQ(
+        queried.value,
+        (json_t{ { "action", "TrackPlaceAction" },
+                 { "status", 0 },
+                 { "accepted", true },
+                 { "cost", 8800 },
+                 { "position", { { "x", 336 }, { "y", 336 }, { "z", 16 } } } }));
+    const auto executed = ExecuteNativeAction("TrackPlaceAction", publicArgs, publicState);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    EXPECT_EQ(executed.value, [&] {
+        auto expected = TrackPlaceResultProjection(ordinaryResult);
+        expected["action"] = "TrackPlaceAction";
+        return expected;
+    }());
+    EXPECT_EQ(publicState.park.cash - publicCashBefore, -8800);
+    const auto publicProjection = TrackPlaceProjection(publicState, publicRide);
+    EXPECT_EQ(publicProjection, ordinaryProjection);
+
+    const auto& tiles = ordinaryProjection.at("tiles");
+    ASSERT_EQ(tiles.size(), 16u);
+    for (size_t sequence = 0; sequence < tiles.size(); ++sequence)
+    {
+        ASSERT_EQ(tiles[sequence]["x"], kTrackOriginX + static_cast<int32_t>(sequence / 4) * 32);
+        ASSERT_EQ(tiles[sequence]["y"], kTrackOriginY + static_cast<int32_t>(sequence % 4) * 32);
+        const auto& elements = tiles[sequence]["elements"];
+        size_t trackCount = 0;
+        for (const auto& element : elements)
+        {
+            if (!element.contains("track"))
+                continue;
+            ++trackCount;
+            const auto& track = element["track"];
+            EXPECT_EQ(track["baseZ"], 16);
+            EXPECT_EQ(track["clearanceZ"], 176);
+            EXPECT_EQ(track["direction"], 0);
+            EXPECT_FALSE(track["ghost"]);
+            EXPECT_EQ(track["ride"], ordinaryRide.ToUnderlying());
+            EXPECT_EQ(track["rideType"], 81);
+            EXPECT_EQ(track["trackType"], 259);
+            EXPECT_EQ(track["sequence"], sequence);
+            EXPECT_EQ(track["station"], 0);
+            EXPECT_EQ(track["colour"], kTrackColour);
+            EXPECT_EQ(track["seatRotation"], kSeatRotation);
+            EXPECT_EQ(track["brakeSpeed"], 0);
+            EXPECT_FALSE(track["chain"]);
+            EXPECT_FALSE(track["inverted"]);
+        }
+        EXPECT_EQ(trackCount, 1u);
+    }
+    EXPECT_EQ(ordinaryProjection["ride"]["overallView"], (json_t{ { "x", 416 }, { "y", 416 } }));
+    EXPECT_EQ(ordinaryProjection["ride"]["numStations"], 1);
+    EXPECT_EQ(ordinaryProjection["ride"]["station0"]["startX"], kTrackOriginX);
+    EXPECT_EQ(ordinaryProjection["ride"]["station0"]["startY"], kTrackOriginY);
+    EXPECT_EQ(ordinaryProjection["ride"]["station0"]["height"], 2);
+    EXPECT_EQ(ordinaryProjection["ride"]["station0"]["length"], 0);
+    EXPECT_EQ(ordinaryProjection["ride"]["station0"]["depart"], 1);
+    EXPECT_EQ(ordinaryProjection["ride"]["numTrains"], 1);
+    EXPECT_EQ(ordinaryProjection["ride"]["maxTrains"], 1);
+    EXPECT_EQ(ordinaryProjection["ride"]["numCarsPerTrain"], 1);
+    EXPECT_EQ(ordinaryProjection["ride"]["minCarsPerTrain"], 1);
+    EXPECT_EQ(ordinaryProjection["ride"]["maxCarsPerTrain"], 1);
+}
+
+TEST_F(NativeActionContractTrackPlace, RejectsMissingRideAndRideTypeMismatchWithoutMutation)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    RideId rideId{};
+    json_t legalArgs;
+    PrepareLegalState(state, rideId, legalArgs);
+    auto missingRide = legalArgs;
+    missingRide["ride"] = 65535;
+    ExpectRejected(state, rideId, legalArgs, missingRide, GameActions::Status::invalidParameters, STR_ERR_RIDE_NOT_FOUND);
+
+    LoadEnterprisePark();
+    auto& mismatchState = OpenRCT2::getGameState();
+    RideId mismatchRide{};
+    json_t mismatchArgs;
+    PrepareLegalState(mismatchState, mismatchRide, mismatchArgs);
+    auto mismatch = mismatchArgs;
+    mismatch["rideType"] = 80;
+    ExpectRejected(mismatchState, mismatchRide, mismatchArgs, mismatch, GameActions::Status::invalidParameters, kStringIdNone);
+}
+
+TEST_F(NativeActionContractTrackPlace, RejectsOriginAndBrakeSpeedWithoutMutation)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    RideId rideId{};
+    json_t legalArgs;
+    PrepareLegalState(state, rideId, legalArgs);
+    auto offMap = legalArgs;
+    offMap["x"] = -32;
+    ExpectRejected(state, rideId, legalArgs, offMap, GameActions::Status::invalidParameters, STR_OFF_EDGE_OF_MAP);
+
+    LoadEnterprisePark();
+    auto& heightState = OpenRCT2::getGameState();
+    RideId heightRide{};
+    json_t heightArgs;
+    PrepareLegalState(heightState, heightRide, heightArgs);
+    auto invalidHeight = heightArgs;
+    invalidHeight["z"] = 17;
+    ExpectRejected(
+        heightState, heightRide, heightArgs, invalidHeight, GameActions::Status::invalidParameters, STR_INVALID_HEIGHT);
+
+    LoadEnterprisePark();
+    auto& speedState = OpenRCT2::getGameState();
+    RideId speedRide{};
+    json_t speedArgs;
+    PrepareLegalState(speedState, speedRide, speedArgs);
+    auto excessiveSpeed = speedArgs;
+    excessiveSpeed["brakeSpeed"] = kMaximumTrackSpeed + 1;
+    ExpectRejected(
+        speedState, speedRide, speedArgs, excessiveSpeed, GameActions::Status::invalidParameters, STR_SPEED_TOO_HIGH);
+}
+
+TEST_F(NativeActionContractTrackPlace, RejectsTrackTypeColourSeatAndUnknownFlagsWithoutMutation)
+{
+    for (const auto& invalid : std::array<std::pair<std::string, int32_t>, 3>{
+             std::pair{ "trackType", static_cast<int32_t>(TrackElemType::count) },
+             std::pair{ "colour", static_cast<int32_t>(kNumRideColourSchemes) }, std::pair{ "seatRotation", 16 } })
+    {
+        LoadEnterprisePark();
+        auto& state = OpenRCT2::getGameState();
+        RideId rideId{};
+        json_t legalArgs;
+        PrepareLegalState(state, rideId, legalArgs);
+        auto invalidArgs = legalArgs;
+        invalidArgs[invalid.first] = invalid.second;
+        ExpectRejected(
+            state, rideId, legalArgs, invalidArgs, GameActions::Status::invalidParameters, STR_ERR_VALUE_OUT_OF_RANGE);
+    }
+
+    LoadEnterprisePark();
+    auto& flagsState = OpenRCT2::getGameState();
+    RideId flagsRide{};
+    json_t flagsArgs;
+    PrepareLegalState(flagsState, flagsRide, flagsArgs);
+    auto invalidFlags = flagsArgs;
+    invalidFlags["trackPlaceFlags"] = 4;
+    ExpectRejected(
+        flagsState, flagsRide, flagsArgs, invalidFlags, GameActions::Status::invalidParameters, STR_ERR_VALUE_OUT_OF_RANGE);
+}
+
+TEST_F(NativeActionContractTrackPlace, PublicSchemaMakesFromTrackDesignBoolean)
+{
+    const auto actions = NativeActions();
+    const auto descriptor = std::find_if(
+        actions.begin(), actions.end(), [](const auto& action) { return action.name == "TrackPlaceAction"; });
+    ASSERT_NE(descriptor, actions.end());
+    ASSERT_TRUE(descriptor->schema["properties"].contains("isFromTrackDesign"));
+    EXPECT_EQ(descriptor->schema["properties"]["isFromTrackDesign"]["type"], "boolean");
+}
+
+TEST_F(NativeActionContractTrackPlace, ExecuteRequeriesOccupiedTouchedTile)
+{
+    LoadEnterprisePark();
+    auto& state = OpenRCT2::getGameState();
+    RideId rideId{};
+    json_t legalArgs;
+    PrepareLegalState(state, rideId, legalArgs);
+    const auto queried = QueryNativeAction("TrackPlaceAction", legalArgs, state);
+    ASSERT_TRUE(queried.ok) << queried.message;
+    ASSERT_TRUE(queried.value["accepted"]) << queried.value.dump();
+
+    auto* occupied = TileElementInsert<TrackElement>({ kTrackOriginX, kTrackOriginY, kTrackOriginZ }, 0b1111);
+    ASSERT_NE(occupied, nullptr);
+    occupied->setClearanceZ(32);
+    occupied->setDirection(static_cast<Direction>(0));
+    occupied->SetSequenceIndex(0);
+    occupied->SetRideIndex(rideId);
+    occupied->SetRideType(81);
+    occupied->SetTrackType(TrackElemType::flatTrack4x4);
+    state.cheats.disableClearanceChecks = false;
+    const auto before = TrackPlaceProjection(state, rideId);
+    auto expected = TrackPlaceRejectedResult(
+        GameActions::Status::noClearance, STR_RIDE_CONSTRUCTION_CANT_CONSTRUCT_THIS_HERE, STR_X_IN_THE_WAY, "no_clearance");
+    expected["rejection"]["message"] = "Enterprise 1 in the way";
+    const auto executed = ExecuteNativeAction("TrackPlaceAction", legalArgs, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    EXPECT_EQ(executed.value, expected);
+    EXPECT_EQ(TrackPlaceProjection(state, rideId), before);
 }
