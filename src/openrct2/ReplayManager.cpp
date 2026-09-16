@@ -527,6 +527,11 @@ namespace OpenRCT2
             return true;
         }
 
+        virtual void ClearPlaybackEnd() override
+        {
+            _playbackEnd.reset();
+        }
+
         virtual bool NormaliseReplay(const std::string& file, const std::string& outFile) override
         {
             _mode = ReplayMode::NORMALISATION;

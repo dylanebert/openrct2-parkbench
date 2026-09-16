@@ -78,6 +78,8 @@ namespace OpenRCT2
         virtual bool GetPlaybackProgress(ReplayPlaybackProgress& progress) const = 0;
         // Progress at the moment the last normal playback ended; false before any playback has ended.
         virtual bool GetPlaybackEnd(ReplayPlaybackProgress& progress) const = 0;
+        // Drops the end snapshot so it does not outlive the replayed park.
+        virtual void ClearPlaybackEnd() = 0;
 
         virtual bool NormaliseReplay(const std::string& inputFile, const std::string& outputFile) = 0;
     };

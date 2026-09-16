@@ -149,6 +149,7 @@ namespace OpenRCT2
         // If set, will end the OpenRCT2 game loop. Intentionally private to this module so that the flag can not be set back to
         // false.
         bool _finished = false;
+        bool _replayStartupFailed = false;
 
         std::future<void> _versionCheckFuture;
         NewVersionInfo _newVersionInfo;
@@ -323,7 +324,7 @@ namespace OpenRCT2
             if (Initialise())
             {
                 Launch();
-                return EXIT_SUCCESS;
+                return _replayStartupFailed ? EXIT_FAILURE : EXIT_SUCCESS;
             }
             return EXIT_FAILURE;
         }
@@ -1378,7 +1379,9 @@ namespace OpenRCT2
                     {
                         Console::Error::WriteLine("Failed to replay '%s'", gOpenRCT2StartupActionPath);
                         Console::Error::WriteLine("%s", ex.what());
-                        nextScene = _sceneManager->getTitleScene();
+                        _replayStartupFailed = true;
+                        Finish();
+                        return;
                     }
                     break;
                 }
@@ -1465,6 +1468,13 @@ namespace OpenRCT2
          */
         void Launch()
         {
+            if (gOpenRCT2Headless && gOpenRCT2StartupAction == StartupAction::replay)
+            {
+                Console::Error::WriteLine("--replay needs the game window; openrct2-cli cannot play a replay");
+                _replayStartupFailed = true;
+                return;
+            }
+
             if (!_versionCheckFuture.valid())
             {
                 _versionCheckFuture = std::async(std::launch::async, [this] {

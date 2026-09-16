@@ -270,6 +270,12 @@ namespace OpenRCT2
 
         if (!_replayPath.empty())
         {
+            const char* conflictingUri;
+            if (enumerator->TryPopString(&conflictingUri) && conflictingUri[0] != '-')
+            {
+                Console::Error::WriteLine("--replay cannot be combined with a park to open ('%s')", conflictingUri);
+                return ExitCode::fail;
+            }
             String::set(gOpenRCT2StartupActionPath, sizeof(gOpenRCT2StartupActionPath), Path::GetAbsolute(_replayPath).c_str());
             gOpenRCT2StartupAction = StartupAction::replay;
             return ExitCode::launch;

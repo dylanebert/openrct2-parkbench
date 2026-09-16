@@ -24,6 +24,7 @@
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/ReplayManager.h>
+#include <openrct2/scenes/SceneManager.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
 #include <openrct2/ride/TrackDesign.h>
@@ -647,11 +648,23 @@ TEST_F(NativeActionThroughline, RecordingStopReportsEngineCommandCountAndTickSpa
     EXPECT_EQ(progress.CommandsPlayed, 0u);
     EXPECT_EQ(progress.TotalCommands, 1u);
     EXPECT_FALSE(replayManager->GetPlaybackEnd(progress));
-    ASSERT_TRUE(replayManager->StopPlayback());
-    ASSERT_TRUE(replayManager->GetPlaybackEnd(progress));
-    EXPECT_EQ(progress.Tick, scriptedStart);
-    EXPECT_EQ(progress.TotalCommands, 1u);
+    for (int step = 0; step <= 10 && replayManager->IsReplaying(); step++)
+    {
+        replayManager->Update();
+        if (replayManager->IsReplaying())
+            state.currentTicks++;
+    }
     EXPECT_FALSE(replayManager->IsReplaying());
+    ASSERT_TRUE(replayManager->GetPlaybackEnd(progress));
+    EXPECT_EQ(progress.Tick, scriptedStart + 5);
+    EXPECT_EQ(progress.CommandsPlayed, 1u);
+    EXPECT_EQ(progress.TotalCommands, 1u);
+    EXPECT_EQ(progress.TicksPlayed, 5u);
+    EXPECT_EQ(progress.TotalTicks, 5u);
+
+    auto* sceneManager = _context->GetSceneManager();
+    sceneManager->setActiveScene(sceneManager->getGameScene());
+    EXPECT_FALSE(replayManager->GetPlaybackEnd(progress));
     std::filesystem::remove_all(root);
 }
 
