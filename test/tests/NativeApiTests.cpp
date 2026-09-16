@@ -23,6 +23,7 @@
 #include <openrct2/OpenRCT2.h>
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
+#include <openrct2/ReplayManager.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
 #include <openrct2/ride/TrackDesign.h>
@@ -588,6 +589,23 @@ TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
     ASSERT_NE(it, actions.end());
     const auto descriptor = NativeActionDescriptorJson(*it);
     EXPECT_EQ(descriptor["policy"]["flags"], "native-controlled");
+}
+
+TEST_F(NativeActionThroughline, SynchronousExecuteIsRecordedIntoActiveReplay)
+{
+    auto& state = OpenRCT2::getGameState();
+    auto* replayManager = _context->GetReplayManager();
+    ASSERT_NE(replayManager, nullptr);
+    ASSERT_TRUE(replayManager->StartRecording("native-sync-replay", OpenRCT2::k_MaxReplayTicks));
+
+    const auto executed = ExecuteNativeAction("ParkSetNameAction", json_t{ { "name", "Replay Park" } }, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
+
+    OpenRCT2::ReplayRecordInfo info;
+    ASSERT_TRUE(replayManager->GetCurrentReplayInfo(info));
+    EXPECT_EQ(info.NumCommands, 1u);
+    replayManager->StopRecording(true);
 }
 
 TEST(NativeApiPolicy, UniversalFlagsAreNotCallerControlledAndSavePathsAreContained)
