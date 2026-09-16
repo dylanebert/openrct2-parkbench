@@ -361,7 +361,9 @@ namespace OpenRCT2::GameActions
                 MoneyEffect::Create(result.cost, result.position);
             }
 
-            if (!synchronous && !(actionFlags & Flags::ClientOnly) && result.error == Status::ok)
+            // Native synchronous executes skip network bookkeeping but still feed an active replay recording.
+            if ((!synchronous || Network::GetMode() == Network::Mode::none) && !(actionFlags & Flags::ClientOnly)
+                && result.error == Status::ok)
             {
                 if (Network::GetMode() != Network::Mode::none)
                 {
