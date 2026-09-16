@@ -24,6 +24,7 @@
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/ReplayManager.h>
+#include <openrct2/scenes/SceneManager.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
 #include <openrct2/ride/TrackDesign.h>
@@ -606,6 +607,65 @@ TEST_F(NativeActionThroughline, SynchronousExecuteIsRecordedIntoActiveReplay)
     ASSERT_TRUE(replayManager->GetCurrentReplayInfo(info));
     EXPECT_EQ(info.NumCommands, 1u);
     replayManager->StopRecording(true);
+}
+
+TEST_F(NativeActionThroughline, RecordingStopReportsEngineCommandCountAndTickSpan)
+{
+    auto& state = OpenRCT2::getGameState();
+    const auto root = std::filesystem::temp_directory_path() / "parkbench-native-recording-stop";
+    std::filesystem::remove_all(root);
+    SetNativeRecordingRoot(root.string());
+
+    const auto emptyPath = (root / "empty.parkrep").string();
+    ASSERT_TRUE(StartNativeRecording(emptyPath).ok);
+    const auto emptyStart = state.currentTicks;
+    state.currentTicks += 2;
+    const auto empty = StopNativeRecording();
+    ASSERT_TRUE(empty.ok) << empty.message;
+    EXPECT_EQ(empty.value["commandCount"], 0u) << empty.value.dump();
+    EXPECT_EQ(empty.value["tickStart"], emptyStart) << empty.value.dump();
+    EXPECT_EQ(empty.value["tickEnd"], emptyStart + 2) << empty.value.dump();
+
+    const auto scriptedPath = (root / "scripted.parkrep").string();
+    ASSERT_TRUE(StartNativeRecording(scriptedPath).ok);
+    const auto scriptedStart = state.currentTicks;
+    const auto executed = ExecuteNativeAction("ParkSetNameAction", json_t{ { "name", "Recorded Park" } }, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    state.currentTicks += 5;
+    const auto scripted = StopNativeRecording();
+    ASSERT_TRUE(scripted.ok) << scripted.message;
+    EXPECT_EQ(scripted.value["commandCount"], 1u) << scripted.value.dump();
+    EXPECT_EQ(scripted.value["tickStart"], scriptedStart) << scripted.value.dump();
+    EXPECT_EQ(scripted.value["tickEnd"], scriptedStart + 5) << scripted.value.dump();
+
+    auto* replayManager = _context->GetReplayManager();
+    OpenRCT2::ReplayPlaybackProgress progress{};
+    EXPECT_FALSE(replayManager->GetPlaybackProgress(progress));
+    ASSERT_NO_THROW(replayManager->StartPlayback(scriptedPath));
+    ASSERT_TRUE(replayManager->GetPlaybackProgress(progress));
+    EXPECT_EQ(progress.TicksPlayed, 0u);
+    EXPECT_EQ(progress.TotalTicks, 5u);
+    EXPECT_EQ(progress.CommandsPlayed, 0u);
+    EXPECT_EQ(progress.TotalCommands, 1u);
+    EXPECT_FALSE(replayManager->GetPlaybackEnd(progress));
+    for (int step = 0; step <= 10 && replayManager->IsReplaying(); step++)
+    {
+        replayManager->Update();
+        if (replayManager->IsReplaying())
+            state.currentTicks++;
+    }
+    EXPECT_FALSE(replayManager->IsReplaying());
+    ASSERT_TRUE(replayManager->GetPlaybackEnd(progress));
+    EXPECT_EQ(progress.Tick, scriptedStart + 5);
+    EXPECT_EQ(progress.CommandsPlayed, 1u);
+    EXPECT_EQ(progress.TotalCommands, 1u);
+    EXPECT_EQ(progress.TicksPlayed, 5u);
+    EXPECT_EQ(progress.TotalTicks, 5u);
+
+    auto* sceneManager = _context->GetSceneManager();
+    sceneManager->setActiveScene(sceneManager->getGameScene());
+    EXPECT_FALSE(replayManager->GetPlaybackEnd(progress));
+    std::filesystem::remove_all(root);
 }
 
 TEST(NativeApiPolicy, UniversalFlagsAreNotCallerControlledAndSavePathsAreContained)

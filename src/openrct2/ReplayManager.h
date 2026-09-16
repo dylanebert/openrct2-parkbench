@@ -27,11 +27,22 @@ namespace OpenRCT2
     {
         uint16_t Version;
         uint32_t Ticks;
+        uint32_t TickStart;
+        uint32_t TickEnd;
         uint64_t TimeRecorded;
         uint32_t NumCommands;
         uint32_t NumChecksums;
         std::string Name;
         std::string FilePath;
+    };
+
+    struct ReplayPlaybackProgress
+    {
+        uint32_t TicksPlayed;
+        uint32_t TotalTicks;
+        uint32_t CommandsPlayed;
+        uint32_t TotalCommands;
+        uint32_t Tick;
     };
 
     struct IReplayManager
@@ -63,6 +74,12 @@ namespace OpenRCT2
         virtual void StartPlayback(const std::string& file) = 0;
         virtual bool IsPlaybackStateMismatching() const = 0;
         virtual bool StopPlayback() = 0;
+        // Progress of the playback in progress; false when not replaying.
+        virtual bool GetPlaybackProgress(ReplayPlaybackProgress& progress) const = 0;
+        // Progress at the moment the last normal playback ended; false before any playback has ended.
+        virtual bool GetPlaybackEnd(ReplayPlaybackProgress& progress) const = 0;
+        // Drops the end snapshot so it does not outlive the replayed park.
+        virtual void ClearPlaybackEnd() = 0;
 
         virtual bool NormaliseReplay(const std::string& inputFile, const std::string& outputFile) = 0;
     };

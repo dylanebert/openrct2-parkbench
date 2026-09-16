@@ -20,7 +20,8 @@ enum class StartupAction
     intro,
     title,
     open,
-    edit
+    edit,
+    replay
 };
 
 enum class LegacyScene : uint8_t

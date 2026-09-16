@@ -10,6 +10,7 @@
 #include "SceneManager.h"
 
 #include "../Context.h"
+#include "../ReplayManager.h"
 #include "game/GameScene.h"
 #include "intro/IntroScene.h"
 #include "preloader/PreloaderScene.h"
@@ -85,6 +86,9 @@ namespace OpenRCT2
             if (_activeScene != nullptr)
                 _activeScene->Stop();
             _activeScene = screen;
+            // Park loads switch scenes too, so the replay end line ends with its park.
+            if (auto* replayManager = _sceneContext->GetReplayManager())
+                replayManager->ClearPlaybackEnd();
             if (_activeScene)
                 _activeScene->Load();
         }
