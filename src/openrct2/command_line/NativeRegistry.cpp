@@ -1102,7 +1102,12 @@ namespace OpenRCT2::CommandLine
         replay->GetCurrentReplayInfo(info);
         if (!replay->StopRecording())
             return Failure("recording_finalize_failed", "the engine could not finalize native recording", { { "path", info.FilePath } });
-        return Success({ { "status", "final" }, { "path", info.FilePath }, { "tick", getGameState().currentTicks } });
+        return Success({ { "status", "final" },
+                         { "path", info.FilePath },
+                         { "tick", getGameState().currentTicks },
+                         { "commandCount", info.NumCommands },
+                         { "tickStart", info.TickStart },
+                         { "tickEnd", info.TickEnd } });
     }
 
     NativeDispatchResult ValidateNativeCaptureView(const json_t& view, int32_t mapWidth, int32_t mapHeight)

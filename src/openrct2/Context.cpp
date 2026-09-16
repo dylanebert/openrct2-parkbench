@@ -1367,6 +1367,22 @@ namespace OpenRCT2
                     break;
                 }
 
+                case StartupAction::replay:
+                {
+                    try
+                    {
+                        _replayManager->StartPlayback(gOpenRCT2StartupActionPath);
+                        nextScene = _sceneManager->getGameScene();
+                    }
+                    catch (const std::exception& ex)
+                    {
+                        Console::Error::WriteLine("Failed to replay '%s'", gOpenRCT2StartupActionPath);
+                        Console::Error::WriteLine("%s", ex.what());
+                        nextScene = _sceneManager->getTitleScene();
+                    }
+                    break;
+                }
+
                 case StartupAction::edit:
                 {
                     if (String::sizeOf(gOpenRCT2StartupActionPath) == 0)

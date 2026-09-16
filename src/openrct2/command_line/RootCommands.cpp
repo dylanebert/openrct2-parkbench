@@ -70,6 +70,7 @@ namespace OpenRCT2
     static u8string _nativeMonitorRecordingRoot = {};
     static u8string _nativeMonitorCaptureRoot = {};
     static u8string _password = {};
+    static u8string _replayPath = {};
     static u8string _userDataPath = {};
     static u8string _openrct2DataPath = {};
     static u8string _rct1DataPath = {};
@@ -93,6 +94,7 @@ namespace OpenRCT2
         { CMDLINE_TYPE_STRING,  &_nativeMonitorCaptureRoot, kNAC, "native-monitor-capture-root", "private native capture containment root" },
         { CMDLINE_TYPE_SWITCH,  &_headlessGraphics, kNAC, "headless-graphics",  "headless only: load base graphics so captureImage can render (default off)" },
         { CMDLINE_TYPE_SWITCH,  &_silentReplays,    kNAC, "silent-replays",     "use unobtrusive replays"                                    },
+        { CMDLINE_TYPE_STRING,  &_replayPath,       kNAC, "replay",             "play back the recording at <path> at launch"                },
     #ifndef DISABLE_NETWORK
         { CMDLINE_TYPE_INTEGER, &_port,             kNAC, "port",               "port to use for hosting or joining a server"                },
         { CMDLINE_TYPE_STRING,  &_address,          kNAC, "address",            "address to listen on when hosting a server"                 },
@@ -264,6 +266,13 @@ namespace OpenRCT2
         if (result != ExitCode::launch)
         {
             return result;
+        }
+
+        if (!_replayPath.empty())
+        {
+            String::set(gOpenRCT2StartupActionPath, sizeof(gOpenRCT2StartupActionPath), Path::GetAbsolute(_replayPath).c_str());
+            gOpenRCT2StartupAction = StartupAction::replay;
+            return ExitCode::launch;
         }
 
         const char* parkUri;

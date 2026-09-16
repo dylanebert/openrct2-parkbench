@@ -44,9 +44,11 @@
 #include "scenario/Scenario.h"
 #include "world/Park.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -375,8 +377,13 @@ namespace OpenRCT2
             info.Name = data->name;
             info.Version = data->version;
             info.TimeRecorded = data->timeRecorded;
+            info.TickStart = data->tickStart;
+            info.TickEnd = data->tickEnd;
             if (_mode == ReplayMode::RECORDING)
-                info.Ticks = getGameState().currentTicks - data->tickStart;
+            {
+                info.TickEnd = getGameState().currentTicks;
+                info.Ticks = info.TickEnd - data->tickStart;
+            }
             else if (_mode == ReplayMode::PLAYING)
                 info.Ticks = data->tickEnd - data->tickStart;
             info.NumCommands = static_cast<uint32_t>(data->commands.size());
@@ -451,6 +458,8 @@ namespace OpenRCT2
 
             LoadAndCompareSnapshot(replayData->gameStateSnapshots);
 
+            _playbackTotalCommands = static_cast<uint32_t>(replayData->commands.size());
+            _playbackEnd.reset();
             _currentReplay = std::move(replayData);
             _currentReplay->checksumIndex = 0;
             _faultyChecksumIndex = -1;
@@ -477,6 +486,9 @@ namespace OpenRCT2
             // During normal playback we pause the game if stopped.
             if (_mode == ReplayMode::PLAYING)
             {
+                ReplayPlaybackProgress end{};
+                GetPlaybackProgress(end);
+                _playbackEnd = end;
                 News::Item* news = News::AddItemToQueue(News::ItemType::blank, "Replay playback complete", 0);
                 news->setFlags(News::ItemFlags::hasButton); // Has no subject.
             }
@@ -489,6 +501,29 @@ namespace OpenRCT2
 
             _currentReplay.reset();
 
+            return true;
+        }
+
+        virtual bool GetPlaybackProgress(ReplayPlaybackProgress& progress) const override
+        {
+            if (_mode != ReplayMode::PLAYING || _currentReplay == nullptr)
+                return false;
+
+            const auto currentTicks = getGameState().currentTicks;
+            const auto remaining = static_cast<uint32_t>(_currentReplay->commands.size());
+            progress.Tick = currentTicks;
+            progress.TotalTicks = _currentReplay->tickEnd - _currentReplay->tickStart;
+            progress.TicksPlayed = std::min(currentTicks - _currentReplay->tickStart, progress.TotalTicks);
+            progress.TotalCommands = _playbackTotalCommands;
+            progress.CommandsPlayed = _playbackTotalCommands - std::min(remaining, _playbackTotalCommands);
+            return true;
+        }
+
+        virtual bool GetPlaybackEnd(ReplayPlaybackProgress& progress) const override
+        {
+            if (!_playbackEnd.has_value())
+                return false;
+            progress = *_playbackEnd;
             return true;
         }
 
@@ -884,6 +919,8 @@ namespace OpenRCT2
         std::unique_ptr<ReplayRecordData> _currentReplay;
         int32_t _faultyChecksumIndex = -1;
         uint32_t _commandId = 0;
+        uint32_t _playbackTotalCommands = 0;
+        std::optional<ReplayPlaybackProgress> _playbackEnd;
         uint32_t _nextChecksumTick = 0;
         uint32_t _nextReplayTick = 0;
         RecordType _recordType = RecordType::NORMAL;
