@@ -45,6 +45,34 @@ namespace OpenRCT2
         uint32_t Tick;
     };
 
+    enum class ReplayPlaybackPhase
+    {
+        Idle,
+        Playing,
+        Ended,
+    };
+
+    enum class ReplayPlaybackVerdict
+    {
+        Pending,
+        Synchronized,
+        Desynchronized,
+    };
+
+    // This is the engine-owned playback verdict. It remains available after
+    // playback ends so callers do not have to infer correctness from a news
+    // item or from the absence of a replay error.
+    struct ReplayPlaybackStatus
+    {
+        ReplayPlaybackPhase Phase = ReplayPlaybackPhase::Idle;
+        uint32_t CurrentTick = 0;
+        uint32_t TargetTick = 0;
+        uint32_t ConsumedInputs = 0;
+        uint32_t TotalInputs = 0;
+        ReplayPlaybackVerdict Verdict = ReplayPlaybackVerdict::Pending;
+        std::string StructuralDifference;
+    };
+
     struct IReplayManager
     {
     public:
@@ -78,6 +106,8 @@ namespace OpenRCT2
         virtual bool GetPlaybackProgress(ReplayPlaybackProgress& progress) const = 0;
         // Progress at the moment the last normal playback ended; false before any playback has ended.
         virtual bool GetPlaybackEnd(ReplayPlaybackProgress& progress) const = 0;
+        // The engine-owned status is available during playback and remains available after it ends.
+        virtual bool GetPlaybackStatus(ReplayPlaybackStatus& status) const = 0;
         // Drops the end snapshot so it does not outlive the replayed park.
         virtual void ClearPlaybackEnd() = 0;
 

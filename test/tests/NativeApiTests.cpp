@@ -22,6 +22,7 @@
 #include <openrct2/ParkImporter.h>
 #include <openrct2/PlatformEnvironment.h>
 #include <openrct2/ReplayManager.h>
+#include <openrct2/entity/MoneyEffect.h>
 #include <openrct2/scenes/SceneManager.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
@@ -134,13 +135,18 @@ protected:
         gOpenRCT2NoGraphics = true;
         _context = OpenRCT2::CreateContext();
         ASSERT_NE(_context, nullptr);
-        const auto resources = std::filesystem::current_path() / "OpenRCT2.app/Contents/Resources";
+        auto resources = std::filesystem::current_path() / "OpenRCT2.app/Contents/Resources";
+        if (!std::filesystem::is_directory(resources))
+            resources = std::filesystem::current_path() / "build/OpenRCT2.app/Contents/Resources";
         _context->GetPlatformEnvironment().SetBasePath(
             OpenRCT2::DirBase::openrct2, resources.string());
         ASSERT_TRUE(_context->Initialise());
 
         auto importer = OpenRCT2::ParkImporter::CreateS6(_context->GetObjectRepository());
-        auto loadResult = importer->LoadSavedGame(TestData::GetParkPath(name).c_str(), false);
+        auto parkPath = std::filesystem::path(TestData::GetParkPath(name));
+        if (!std::filesystem::is_regular_file(parkPath))
+            parkPath = std::filesystem::current_path() / "test/tests/testdata/parks" / name;
+        auto loadResult = importer->LoadSavedGame(parkPath.string().c_str(), false);
         _context->GetObjectManager().LoadObjects(loadResult.RequiredObjects);
         importer->Import(OpenRCT2::getGameState());
     }
@@ -380,6 +386,64 @@ TEST_F(NativeActionThroughline, RecordingStopReportsEngineCommandCountAndTickSpa
     sceneManager->setActiveScene(sceneManager->getGameScene());
     EXPECT_FALSE(replayManager->GetPlaybackEnd(progress));
     std::filesystem::remove_all(root);
+}
+
+class NativeReplayClosure : public NativeActionThroughline
+{
+};
+
+TEST_F(NativeReplayClosure, ForcedMismatchReportsDesynchronized)
+{
+    auto& state = OpenRCT2::getGameState();
+    const auto root = std::filesystem::temp_directory_path() / "parkbench-native-replay-closure";
+    std::filesystem::remove_all(root);
+    SetNativeRecordingRoot(root.string());
+    const auto path = (root / "forced-mismatch.parkrep").string();
+
+    ASSERT_TRUE(StartNativeRecording(path).ok);
+    const auto startTick = state.currentTicks;
+    const auto executed = ExecuteNativeAction("ParkSetNameAction", json_t{ { "name", "Recorded Park" } }, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    state.currentTicks += 3;
+    const auto recorded = StopNativeRecording();
+    ASSERT_TRUE(recorded.ok) << recorded.message;
+    ASSERT_EQ(recorded.value["commandCount"], 1u);
+    ASSERT_EQ(recorded.value["tickEnd"], startTick + 3);
+
+    auto* replayManager = _context->GetReplayManager();
+    ASSERT_NO_THROW(replayManager->StartPlayback(path));
+
+    ReplayPlaybackStatus status{};
+    ASSERT_TRUE(replayManager->GetPlaybackStatus(status));
+    EXPECT_EQ(status.Phase, ReplayPlaybackPhase::Playing);
+    EXPECT_EQ(status.CurrentTick, startTick);
+    EXPECT_EQ(status.TargetTick, startTick + 3);
+    EXPECT_EQ(status.ConsumedInputs, 0u);
+    EXPECT_EQ(status.TotalInputs, 1u);
+    EXPECT_EQ(status.Verdict, ReplayPlaybackVerdict::Pending);
+
+    // This is a deliberate canonical-state change. MoneyEffect is a
+    // state-bearing transient and must remain part of the comparison.
+    ASSERT_NE(state.entities.CreateEntity<OpenRCT2::MoneyEffect>(), nullptr);
+    while (replayManager->IsReplaying())
+    {
+        replayManager->Update();
+        if (replayManager->IsReplaying())
+            state.currentTicks++;
+    }
+
+    ASSERT_TRUE(replayManager->GetPlaybackStatus(status));
+    EXPECT_EQ(status.Phase, ReplayPlaybackPhase::Ended);
+    EXPECT_EQ(status.CurrentTick, startTick + 3);
+    EXPECT_EQ(status.TargetTick, startTick + 3);
+    EXPECT_EQ(status.ConsumedInputs, 1u);
+    EXPECT_EQ(status.TotalInputs, 1u);
+    EXPECT_EQ(status.Verdict, ReplayPlaybackVerdict::Desynchronized);
+    EXPECT_NE(status.StructuralDifference.find("Money effect"), std::string::npos);
+    EXPECT_TRUE(replayManager->IsPlaybackStateMismatching());
+
+    std::filesystem::remove_all(root);
+    SetNativeRecordingRoot({});
 }
 
 TEST(NativeApiPolicy, SavePathsStayContained)

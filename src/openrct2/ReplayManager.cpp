@@ -392,8 +392,12 @@ namespace OpenRCT2
             return true;
         }
 
-        void LoadAndCompareSnapshot(MemoryStream& snapshotStream)
+        std::string LoadAndCompareSnapshot(MemoryStream& snapshotStream)
         {
+            // StartPlayback also compares the initial snapshot. Reset the
+            // stream so the terminal comparison reads the same snapshot
+            // rather than silently trying to deserialize at EOF.
+            snapshotStream.SetPosition(0);
             DataSerialiser ds(false, snapshotStream);
 
             IGameStateSnapshots* snapshots = GetContext()->GetGameStateSnapshots();
@@ -410,27 +414,40 @@ namespace OpenRCT2
             {
                 GameStateCompareData cmpData = snapshots->Compare(replaySnapshot, localSnapshot);
 
-                // Find out if there are any differences between the two states
-                auto res = std::find_if(
+                const bool hasSpriteDifference = std::any_of(
                     cmpData.spriteChanges.begin(), cmpData.spriteChanges.end(),
                     [](const GameStateSpriteChange& diff) { return diff.changeType != GameStateSpriteChange::EQUAL; });
+                const bool hasDifference = hasSpriteDifference || cmpData.tickLeft != cmpData.tickRight
+                    || cmpData.srand0Left != cmpData.srand0Right;
+                if (!hasDifference)
+                    return {};
 
-                // If there are difference write a log to the desyncs folder
-                if (res != cmpData.spriteChanges.end())
-                {
-                    std::string outputPath = GetContext()->GetPlatformEnvironment().GetDirectoryPath(
-                        DirBase::user, DirId::desyncLogs);
-                    char uniqueFileName[128] = {};
-                    snprintf(uniqueFileName, sizeof(uniqueFileName), "replay_desync_%u.txt", currentTicks);
+                // Keep the complete structural comparison as the verdict's
+                // retained evidence. This includes transient entities such
+                // as MoneyEffect; only equal snapshots have no evidence.
+                const auto difference = snapshots->GetCompareDataText(cmpData);
 
-                    std::string outputFile = Path::Combine(outputPath, uniqueFileName);
-                    snapshots->LogCompareDataToFile(outputFile, cmpData);
-                }
+                std::string outputPath = GetContext()->GetPlatformEnvironment().GetDirectoryPath(
+                    DirBase::user, DirId::desyncLogs);
+                char uniqueFileName[128] = {};
+                snprintf(uniqueFileName, sizeof(uniqueFileName), "replay_desync_%u.txt", currentTicks);
+
+                std::string outputFile = Path::Combine(outputPath, uniqueFileName);
+                snapshots->LogCompareDataToFile(outputFile, cmpData);
+                return difference;
             }
             catch (const std::runtime_error& err)
             {
                 LOG_WARNING("Snapshot data failed to be read. Snapshot not compared. %s", err.what());
+                return std::string("Snapshot comparison failed: ") + err.what();
             }
+        }
+
+        void MarkPlaybackDesynchronized(std::string difference)
+        {
+            _playbackDesynchronized = true;
+            if (!difference.empty())
+                _playbackDifference = std::move(difference);
         }
 
         void StartPlayback(const std::string& file) override
@@ -456,13 +473,27 @@ namespace OpenRCT2
 
             getGameState().currentTicks = replayData->tickStart;
 
-            LoadAndCompareSnapshot(replayData->gameStateSnapshots);
+            const auto initialDifference = LoadAndCompareSnapshot(replayData->gameStateSnapshots);
 
             _playbackTotalCommands = static_cast<uint32_t>(replayData->commands.size());
             _playbackEnd.reset();
+            _playbackDifference.clear();
+            _playbackDesynchronized = false;
             _currentReplay = std::move(replayData);
             _currentReplay->checksumIndex = 0;
             _faultyChecksumIndex = -1;
+            if (!initialDifference.empty())
+                MarkPlaybackDesynchronized(initialDifference);
+
+            _playbackStatus = ReplayPlaybackStatus{
+                ReplayPlaybackPhase::Playing,
+                getGameState().currentTicks,
+                _currentReplay->tickEnd,
+                0,
+                _playbackTotalCommands,
+                _playbackDesynchronized ? ReplayPlaybackVerdict::Desynchronized : ReplayPlaybackVerdict::Pending,
+                _playbackDifference,
+            };
 
             // Make sure game is not paused.
             gGamePaused = 0;
@@ -473,7 +504,7 @@ namespace OpenRCT2
 
         virtual bool IsPlaybackStateMismatching() const override
         {
-            return _faultyChecksumIndex != -1;
+            return _playbackDesynchronized || _faultyChecksumIndex != -1;
         }
 
         virtual bool StopPlayback() override
@@ -481,7 +512,9 @@ namespace OpenRCT2
             if (_mode != ReplayMode::PLAYING && _mode != ReplayMode::NORMALISATION)
                 return false;
 
-            LoadAndCompareSnapshot(_currentReplay->gameStateSnapshots);
+            const auto finalDifference = LoadAndCompareSnapshot(_currentReplay->gameStateSnapshots);
+            if (!finalDifference.empty())
+                MarkPlaybackDesynchronized(finalDifference);
 
             // During normal playback we pause the game if stopped.
             if (_mode == ReplayMode::PLAYING)
@@ -489,6 +522,16 @@ namespace OpenRCT2
                 ReplayPlaybackProgress end{};
                 GetPlaybackProgress(end);
                 _playbackEnd = end;
+                _playbackStatus = ReplayPlaybackStatus{
+                    ReplayPlaybackPhase::Ended,
+                    end.Tick,
+                    _currentReplay->tickEnd,
+                    end.CommandsPlayed,
+                    end.TotalCommands,
+                    IsPlaybackStateMismatching() ? ReplayPlaybackVerdict::Desynchronized
+                                                  : ReplayPlaybackVerdict::Synchronized,
+                    _playbackDifference,
+                };
                 News::Item* news = News::AddItemToQueue(News::ItemType::blank, "Replay playback complete", 0);
                 news->setFlags(News::ItemFlags::hasButton); // Has no subject.
             }
@@ -527,9 +570,29 @@ namespace OpenRCT2
             return true;
         }
 
+        virtual bool GetPlaybackStatus(ReplayPlaybackStatus& status) const override
+        {
+            if (!_playbackStatus.has_value())
+                return false;
+
+            status = *_playbackStatus;
+            if (status.Phase == ReplayPlaybackPhase::Playing && _currentReplay != nullptr)
+            {
+                const auto currentTicks = getGameState().currentTicks;
+                const auto remaining = static_cast<uint32_t>(_currentReplay->commands.size());
+                status.CurrentTick = currentTicks;
+                status.ConsumedInputs = _playbackTotalCommands - std::min(remaining, _playbackTotalCommands);
+                status.Verdict = IsPlaybackStateMismatching() ? ReplayPlaybackVerdict::Desynchronized
+                                                               : ReplayPlaybackVerdict::Pending;
+                status.StructuralDifference = _playbackDifference;
+            }
+            return true;
+        }
+
         virtual void ClearPlaybackEnd() override
         {
             _playbackEnd.reset();
+            _playbackStatus.reset();
         }
 
         virtual bool NormaliseReplay(const std::string& file, const std::string& outFile) override
@@ -857,6 +920,9 @@ namespace OpenRCT2
                         replayTick, savedChecksum.second.ToString().c_str(), checksum.ToString().c_str());
 
                     _faultyChecksumIndex = checksumIndex;
+                    MarkPlaybackDesynchronized(
+                        FormatString("Checksum mismatch at tick %u; saved %s, current %s", currentTicks,
+                                     savedChecksum.second.ToString().c_str(), checksum.ToString().c_str()));
                 }
                 else
                 {
@@ -926,6 +992,9 @@ namespace OpenRCT2
         uint32_t _commandId = 0;
         uint32_t _playbackTotalCommands = 0;
         std::optional<ReplayPlaybackProgress> _playbackEnd;
+        std::optional<ReplayPlaybackStatus> _playbackStatus;
+        bool _playbackDesynchronized = false;
+        std::string _playbackDifference;
         uint32_t _nextChecksumTick = 0;
         uint32_t _nextReplayTick = 0;
         RecordType _recordType = RecordType::NORMAL;
