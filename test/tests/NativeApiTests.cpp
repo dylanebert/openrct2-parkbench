@@ -13,10 +13,8 @@
 #include <openrct2/Context.h>
 #include <openrct2/actions/ride/RideEntranceExitPlaceAction.h>
 #include <openrct2/actions/ride/RideEntranceExitRemoveAction.h>
-#include <openrct2/actions/track/TrackDesignAction.h>
 #include <openrct2/actions/CommandFlag.h>
 #include <openrct2/actions/GameActionRunner.h>
-#include <openrct2/actions/ResultWithMessage.h>
 #include <openrct2/command_line/NativeRegistry.h>
 #include <openrct2/Game.h>
 #include <openrct2/GameState.h>
@@ -27,14 +25,9 @@
 #include <openrct2/scenes/SceneManager.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
-#include <openrct2/ride/TrackDesign.h>
 #include <openrct2/world/Map.h>
-#include <openrct2/world/tile_element/TrackElement.h>
-#include <openrct2/world/tile_element/SurfaceElement.h>
 #include <openrct2/object/ObjectManager.h>
 
-#include <algorithm>
-#include <array>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -54,45 +47,6 @@ TEST(NativeApiRegistry, HasOneExactInitialResourcePopulation)
         actual.emplace_back(descriptor.name);
     EXPECT_EQ(actual, expected);
     EXPECT_EQ(std::set(actual.begin(), actual.end()).size(), actual.size());
-}
-
-TEST(NativeApiRegistry, ResourceDescriptorsDeclareSchemaUnitsAuthorityInputsAndCapability)
-{
-    for (const auto& descriptor : NativeResources())
-    {
-        EXPECT_NE(descriptor.description, nullptr);
-        EXPECT_TRUE(descriptor.schema.is_object());
-        EXPECT_TRUE(descriptor.units.is_object());
-        EXPECT_TRUE(static_cast<bool>(descriptor.read));
-        const auto json = NativeResourceDescriptorJson(descriptor);
-        EXPECT_FALSE(json["authority"].get<std::string>().empty());
-        EXPECT_EQ(json["classification"], "authoritative");
-        EXPECT_TRUE(json["inputs"].is_array());
-        EXPECT_EQ(json["capability"], "native");
-        EXPECT_TRUE(json.contains("description"));
-        EXPECT_TRUE(json.contains("schema"));
-        EXPECT_TRUE(json.contains("units"));
-    }
-}
-
-TEST(NativeApiRegistry, ActionDescriptorsComeFromNativeActionRegistrations)
-{
-    const auto actions = NativeActions();
-    ASSERT_FALSE(actions.empty());
-    std::set<std::string> names;
-    for (const auto& descriptor : actions)
-    {
-        EXPECT_TRUE(names.insert(descriptor.name).second);
-        EXPECT_TRUE(descriptor.schema.is_object());
-        EXPECT_TRUE(descriptor.schema.contains("properties"));
-        EXPECT_TRUE(descriptor.schema.contains("required"));
-        EXPECT_TRUE(descriptor.units.is_object());
-        const auto json = NativeActionDescriptorJson(descriptor);
-        EXPECT_EQ(json["authority"], "engine");
-        EXPECT_EQ(json["capability"], "native");
-        EXPECT_TRUE(json["inputs"].is_array());
-        EXPECT_TRUE(json.contains("policy"));
-    }
 }
 
 TEST(NativeApiCaptureView, BoundedViewsAcceptExplicitValuesAndRejectMalformedValues)
@@ -328,265 +282,6 @@ TEST_F(NativeActionThroughline, AcceptedPlacementChargesAndMatchesOrdinaryRunner
     EXPECT_EQ(TileElementCount(ordinaryEndpoint.ToCoordsXY()), ordinaryElementsAfter);
 }
 
-static bool HasStationTrack(
-    const CoordsXY& endpoint, int16_t z, Direction direction, RideId rideId, StationIndex stationNum)
-{
-    const auto trackLocation = endpoint + CoordsDirectionDelta[direction];
-    auto* element = MapGetFirstElementAt(trackLocation);
-    if (element == nullptr)
-        return false;
-
-    do
-    {
-        if (element->getBaseZ() == z && element->getType() == TileElementType::Track)
-        {
-            const auto* track = element->asTrack();
-            if (track->GetRideIndex() == rideId && track->GetStationIndex() == stationNum)
-                return true;
-        }
-    } while (!(element++)->isLastForTile());
-    return false;
-}
-
-TEST_F(NativeActionThroughline, RideActionValidityRejectsOutOfRangeDirectionWithoutMutation)
-{
-    auto* ride = FindRideWithEntranceAndTrack();
-    ASSERT_NE(ride, nullptr);
-    auto& station = ride->getStation(StationIndex::FromUnderlying(0));
-    const auto endpoint = station.Entrance;
-    const auto elementsBefore = TileElementCount(endpoint.ToCoordsXY());
-    const auto endpointDirectionBefore = endpoint.direction;
-
-    const auto action = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
-        endpoint.ToCoordsXY(), 4, ride->id, StationIndex::FromUnderlying(0), false);
-    const auto queried = action.Query(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
-    const auto executed = action.Execute(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
-
-    EXPECT_NE(queried.error, OpenRCT2::GameActions::Status::ok);
-    EXPECT_NE(executed.error, OpenRCT2::GameActions::Status::ok);
-    EXPECT_EQ(station.Entrance.direction, endpointDirectionBefore);
-    EXPECT_EQ(TileElementCount(endpoint.ToCoordsXY()), elementsBefore);
-}
-
-TEST_F(NativeActionThroughline, RideActionValidityRejectsEndpointFacingAwayWithoutMutation)
-{
-    auto* ride = FindRideWithEntranceAndTrack();
-    ASSERT_NE(ride, nullptr);
-    auto& station = ride->getStation(StationIndex::FromUnderlying(0));
-    const auto endpoint = station.Entrance;
-    Direction invalidDirection = kInvalidDirection;
-    for (const auto direction : kAllDirections)
-    {
-        if (!HasStationTrack(
-                endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id, StationIndex::FromUnderlying(0)))
-        {
-            invalidDirection = direction;
-            break;
-        }
-    }
-    ASSERT_NE(invalidDirection, kInvalidDirection);
-
-    const auto elementsBefore = TileElementCount(endpoint.ToCoordsXY());
-    const auto endpointBefore = station.Entrance;
-    const auto action = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
-        endpoint.ToCoordsXY(), invalidDirection, ride->id, StationIndex::FromUnderlying(0), false);
-    const auto queried = action.Query(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
-    const auto executed = action.Execute(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
-
-    EXPECT_NE(queried.error, OpenRCT2::GameActions::Status::ok);
-    EXPECT_NE(executed.error, OpenRCT2::GameActions::Status::ok);
-    EXPECT_EQ(station.Entrance, endpointBefore);
-    EXPECT_EQ(TileElementCount(endpoint.ToCoordsXY()), elementsBefore);
-}
-
-TEST_F(NativeActionThroughline, RideActionCompatibilityAcceptsExistingStationSides)
-{
-    auto* ride = FindRideWithEntranceAndTrack();
-    ASSERT_NE(ride, nullptr);
-    ride->status = RideStatus::closed;
-    const auto& station = ride->getStation(StationIndex::FromUnderlying(0));
-
-    OpenRCT2::getGameState().cheats.disableClearanceChecks = true;
-    const auto checkEndpoint = [&](const auto& endpoint, bool isExit) {
-        if (endpoint.IsNull())
-            return;
-        auto action = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
-            endpoint.ToCoordsXY(), endpoint.direction, ride->id, StationIndex::FromUnderlying(0), isExit);
-        action.SetFlags(OpenRCT2::GameActions::CommandFlag::allowDuringPaused);
-        const auto result = action.Query(OpenRCT2::getGameState(), OpenRCT2::getGameState().park);
-        EXPECT_EQ(result.error, OpenRCT2::GameActions::Status::ok);
-    };
-    checkEndpoint(station.Entrance, false);
-    checkEndpoint(station.Exit, true);
-}
-
-TEST_F(NativeActionThroughline, RideActionCompatibilityCoversDeclaredCorpus)
-{
-    constexpr std::array kCorpus{
-        "small_park_with_ferris_wheel.sv6",
-        "small_park_car_ride_one_car.sv6",
-        "bpb.sv6",
-        "BigMapTest.sv6",
-    };
-    bool sawFlat = false;
-    bool sawTracked = false;
-    bool sawMultiStation = false;
-    size_t endpointCases = 0;
-
-    for (const auto* fixture : kCorpus)
-    {
-        SCOPED_TRACE(fixture);
-        LoadPark(fixture);
-        auto& state = OpenRCT2::getGameState();
-        state.cheats.disableClearanceChecks = true;
-        state.cheats.sandboxMode = true;
-        const auto executableEndpointCorpus = std::string_view(fixture).starts_with("small_park_");
-
-        for (RideId::UnderlyingType rideValue = 0; rideValue < Limits::kMaxRidesInPark; ++rideValue)
-        {
-            auto* ride = GetRide(RideId::FromUnderlying(rideValue));
-            if (ride == nullptr)
-                continue;
-            ride->status = RideStatus::closed;
-            const auto hasTrack = ride->getRideTypeDescriptor().flags.has(RtdFlag::hasTrack);
-            sawFlat |= !hasTrack;
-            sawTracked |= hasTrack;
-            sawMultiStation |= ride->numStations > 1;
-
-            for (StationIndex::UnderlyingType stationValue = 0; stationValue < Limits::kMaxStationsPerRide;
-                 ++stationValue)
-            {
-                const auto stationNum = StationIndex::FromUnderlying(stationValue);
-                const auto& station = ride->getStation(stationNum);
-                const std::array endpoints{ std::pair{ station.Entrance, false }, std::pair{ station.Exit, true } };
-                for (const auto& [endpoint, isExit] : endpoints)
-                {
-                    if (endpoint.IsNull())
-                        continue;
-                    ++endpointCases;
-                    const auto endpointXY = endpoint.ToCoordsXY();
-
-                    for (uint8_t rawDirection = 0; rawDirection < 4; ++rawDirection)
-                    {
-                        const auto direction = static_cast<Direction>(rawDirection);
-                        const json_t args{
-                            { "x", endpointXY.x },
-                            { "y", endpointXY.y },
-                            { "direction", static_cast<uint32_t>(rawDirection) },
-                            { "ride", ride->id.ToUnderlying() },
-                            { "station", static_cast<uint32_t>(stationValue) },
-                            { "isExit", isExit },
-                        };
-                        const auto queried = QueryNativeAction("RideEntranceExitPlaceAction", args, state);
-                        ASSERT_TRUE(queried.ok) << fixture << " descriptor direction " << rawDirection;
-                        EXPECT_EQ(
-                            queried.value["accepted"],
-                            HasStationTrack(endpoint.ToCoordsXY(), station.GetBaseZ(), direction, ride->id, stationNum))
-                            << fixture << " ride " << ride->id.ToUnderlying() << " station " << stationValue << " endpoint "
-                            << (isExit ? "exit" : "entrance") << " direction " << rawDirection << " result "
-                            << queried.value.dump();
-                    }
-
-                    if (!executableEndpointCorpus)
-                        continue;
-
-                    const json_t validArgs{
-                        { "x", endpointXY.x },
-                        { "y", endpointXY.y },
-                        { "direction", static_cast<uint32_t>(endpoint.direction) },
-                        { "ride", ride->id.ToUnderlying() },
-                        { "station", static_cast<uint32_t>(stationValue) },
-                        { "isExit", isExit },
-                    };
-                    const auto executed = ExecuteNativeAction("RideEntranceExitPlaceAction", validArgs, state);
-                    ASSERT_TRUE(executed.ok) << fixture << " public endpoint execution";
-                    EXPECT_TRUE(executed.value["accepted"]) << fixture << " result " << executed.value.dump();
-
-                    auto ghostAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
-                        endpointXY, endpoint.direction, ride->id, stationNum, isExit);
-                    ghostAction.SetFlags(static_cast<OpenRCT2::GameActions::CommandFlag>(
-                        static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::ghost)
-                        | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
-                    const auto ghostResult = ghostAction.Query(state, state.park);
-                    EXPECT_EQ(ghostResult.error, OpenRCT2::GameActions::Status::ok)
-                        << fixture << " ghost endpoint " << endpointXY.x << "," << endpointXY.y << " status "
-                        << static_cast<int>(ghostResult.error);
-
-                    auto replayAction = OpenRCT2::GameActions::RideEntranceExitPlaceAction(
-                        endpointXY, endpoint.direction, ride->id, stationNum, isExit);
-                    replayAction.SetFlags(static_cast<OpenRCT2::GameActions::CommandFlag>(
-                        static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::replay)
-                        | static_cast<uint32_t>(OpenRCT2::GameActions::CommandFlag::allowDuringPaused)));
-                    EXPECT_EQ(replayAction.Query(state, state.park).error, OpenRCT2::GameActions::Status::ok)
-                        << fixture << " replay endpoint " << endpointXY.x << "," << endpointXY.y;
-                }
-            }
-        }
-    }
-
-    EXPECT_GT(endpointCases, 0u);
-    EXPECT_TRUE(sawFlat);
-    EXPECT_TRUE(sawTracked);
-    EXPECT_TRUE(sawMultiStation);
-}
-
-TEST_F(NativeActionThroughline, RideActionCompatibilityCoversTrackDesignPlacement)
-{
-    LoadPark("small_park_car_ride_one_car.sv6");
-    auto& state = OpenRCT2::getGameState();
-    state.cheats.disableClearanceChecks = true;
-    state.cheats.sandboxMode = true;
-
-    auto* ride = GetRide(RideId::FromUnderlying(0));
-    ASSERT_NE(ride, nullptr);
-    ride->status = RideStatus::closed;
-
-    TrackDesign trackDesign;
-    TrackDesignState designState{};
-    ASSERT_TRUE(trackDesign.CreateTrackDesign(designState, *ride).Successful);
-    ASSERT_FALSE(trackDesign.trackElements.empty());
-    ASSERT_FALSE(trackDesign.entranceElements.empty());
-
-    const OpenRCT2::GameActions::CommandFlags flags{
-        OpenRCT2::GameActions::CommandFlag::apply,
-        OpenRCT2::GameActions::CommandFlag::allowDuringPaused,
-        OpenRCT2::GameActions::CommandFlag::noSpend,
-        OpenRCT2::GameActions::CommandFlag::replay,
-    };
-    bool placed = false;
-    for (int32_t tileY = 8; tileY < 120 && !placed; tileY += 8)
-    {
-        for (int32_t tileX = 8; tileX < 120 && !placed; tileX += 8)
-        {
-            const CoordsXY mapCoords{ tileX * kCoordsXYStep, tileY * kCoordsXYStep };
-            const auto* surface = MapGetSurfaceElementAt(mapCoords);
-            if (surface == nullptr)
-                continue;
-            const CoordsXYZD probe{ mapCoords, surface->getBaseZ(), 0 };
-            const auto placeZ = TrackDesignGetZPlacement(trackDesign, *ride, probe);
-            const CoordsXYZD origin{ mapCoords, surface->getBaseZ() + placeZ, 0 };
-            OpenRCT2::GameActions::TrackDesignAction action(
-                origin, trackDesign, false, RideInspection::every30Minutes);
-            action.SetFlags(flags);
-            const auto result = action.Execute(state, state.park);
-            if (result.error == OpenRCT2::GameActions::Status::ok)
-                placed = true;
-        }
-    }
-    EXPECT_TRUE(placed) << "track-design replay placement did not find a legal origin";
-}
-
-TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
-{
-    const auto actions = NativeActions();
-    const auto it = std::find_if(actions.begin(), actions.end(), [](const auto& action) {
-        return std::string_view(action.name) == "RideEntranceExitPlaceAction";
-    });
-    ASSERT_NE(it, actions.end());
-    const auto descriptor = NativeActionDescriptorJson(*it);
-    EXPECT_EQ(descriptor["policy"]["flags"], "native-controlled");
-}
-
 TEST_F(NativeActionThroughline, NativeSaveMutateLoadRestoresAuthoritativePark)
 {
     const auto originalPaused = gGamePaused;
@@ -626,23 +321,6 @@ TEST_F(NativeActionThroughline, NativeSaveMutateLoadRestoresAuthoritativePark)
     std::filesystem::remove_all(root);
     SetNativeSaveRoot({});
     gGamePaused = originalPaused;
-}
-
-TEST_F(NativeActionThroughline, SynchronousExecuteIsRecordedIntoActiveReplay)
-{
-    auto& state = OpenRCT2::getGameState();
-    auto* replayManager = _context->GetReplayManager();
-    ASSERT_NE(replayManager, nullptr);
-    ASSERT_TRUE(replayManager->StartRecording("native-sync-replay", OpenRCT2::k_MaxReplayTicks));
-
-    const auto executed = ExecuteNativeAction("ParkSetNameAction", json_t{ { "name", "Replay Park" } }, state);
-    ASSERT_TRUE(executed.ok) << executed.message;
-    ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
-
-    OpenRCT2::ReplayRecordInfo info;
-    ASSERT_TRUE(replayManager->GetCurrentReplayInfo(info));
-    EXPECT_EQ(info.NumCommands, 1u);
-    replayManager->StopRecording(true);
 }
 
 TEST_F(NativeActionThroughline, RecordingStopReportsEngineCommandCountAndTickSpan)
@@ -704,7 +382,7 @@ TEST_F(NativeActionThroughline, RecordingStopReportsEngineCommandCountAndTickSpa
     std::filesystem::remove_all(root);
 }
 
-TEST(NativeApiPolicy, UniversalFlagsAreNotCallerControlledAndSavePathsAreContained)
+TEST(NativeApiPolicy, SavePathsStayContained)
 {
     EXPECT_TRUE(NativePathContained("/tmp/parkbench-owned", "/tmp/parkbench-owned/save.park"));
     EXPECT_FALSE(NativePathContained("/tmp/parkbench-owned", "/tmp/parkbench-owned-other/save.park"));

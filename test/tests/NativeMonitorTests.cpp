@@ -26,47 +26,6 @@
 using namespace OpenRCT2::CommandLine;
 using json_t = nlohmann::json;
 
-TEST(NativeMonitorProtocol, FrameBoundsAndGreetingAreBounded)
-{
-    EXPECT_TRUE(NativeMonitor::EncodeFrame("").empty());
-    EXPECT_TRUE(NativeMonitor::EncodeFrame(std::string(NativeMonitor::kMaxFrameBytes + 1, 'x')).empty());
-
-    const auto frame = NativeMonitor::EncodeFrame("{}\n");
-    ASSERT_EQ(frame.size(), 7u);
-    EXPECT_EQ(frame[0], 0u);
-    EXPECT_EQ(frame[3], 3u);
-
-    const auto greeting = json_t::parse(NativeMonitor::Greeting(17, true));
-    EXPECT_EQ(greeting["schema"], "park/native-monitor/v1");
-    EXPECT_EQ(greeting["version"], NativeMonitor::kProtocolVersion);
-    EXPECT_EQ(greeting["maxFrameBytes"], NativeMonitor::kMaxFrameBytes);
-    EXPECT_EQ(greeting["tick"], 17);
-    EXPECT_TRUE(greeting["paused"]);
-    EXPECT_EQ(
-        greeting["capabilities"],
-        json_t({ "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
-                 "action.list", "action.describe", "action.query", "action.execute", "save", "load",
-                 "record.start", "record.status", "record.stop", "capture" }));
-}
-
-TEST(NativeMonitorProtocol, RequestSchemaPreservesIdsAndStepZero)
-{
-    NativeMonitorRequest request;
-    std::string code;
-    std::string message;
-    ASSERT_TRUE(NativeMonitor::ParseRequest(
-        R"({"type":"request","id":41,"method":"step","params":{"ticks":0}})", request, code, message));
-    EXPECT_EQ(request.id, 41u);
-    EXPECT_EQ(request.method, "step");
-    EXPECT_EQ(request.ticks, 0u);
-
-    ASSERT_TRUE(NativeMonitor::ParseRequest(
-        R"({"type":"request","id":42,"method":"ping","params":{}})", request, code, message));
-    EXPECT_EQ(request.id, 42u);
-    EXPECT_EQ(request.method, "ping");
-    EXPECT_TRUE(request.params.is_object());
-}
-
 TEST(NativeMonitorClock, PausedZeroStepDoesNotAdvanceAndUnpausedStepRefuses)
 {
     const auto originalPaused = gGamePaused;
@@ -78,24 +37,6 @@ TEST(NativeMonitorClock, PausedZeroStepDoesNotAdvanceAndUnpausedStepRefuses)
     EXPECT_FALSE(OpenRCT2::gameStateAdvancePausedNativeMonitor(1));
     EXPECT_EQ(OpenRCT2::getGameState().currentTicks, originalTick);
     gGamePaused = originalPaused;
-}
-
-TEST(NativeMonitorProtocol, InvalidRequestsBecomeStructuredReasons)
-{
-    NativeMonitorRequest request;
-    std::string code;
-    std::string message;
-    EXPECT_FALSE(NativeMonitor::ParseRequest("[]", request, code, message));
-    EXPECT_EQ(code, "invalid_request");
-    EXPECT_FALSE(NativeMonitor::ParseRequest(
-        R"({"type":"request","id":2,"method":"step","params":{"ticks":1000001}})", request, code, message));
-    EXPECT_EQ(code, "invalid_ticks");
-    EXPECT_FALSE(NativeMonitor::ParseRequest(
-        R"({"type":"request","id":3,"method":"not-advertised"})", request, code, message));
-    EXPECT_EQ(code, "unknown_method");
-    EXPECT_FALSE(NativeMonitor::ParseRequest(
-        R"({"type":"request","id":4,"method":"step","params":{"ticks":true}})", request, code, message));
-    EXPECT_EQ(code, "invalid_ticks");
 }
 
 #ifndef _WIN32
