@@ -382,6 +382,17 @@ TEST_F(NativeActionThroughline, RecordingStopReportsEngineCommandCountAndTickSpa
     EXPECT_EQ(progress.TicksPlayed, 5u);
     EXPECT_EQ(progress.TotalTicks, 5u);
 
+    ReplayPlaybackStatus status{};
+    ASSERT_TRUE(replayManager->GetPlaybackStatus(status));
+    EXPECT_EQ(status.Phase, ReplayPlaybackPhase::Ended);
+    EXPECT_EQ(status.Verdict, ReplayPlaybackVerdict::Synchronized);
+
+    const auto afterPlaybackPath = (root / "after-playback.parkrep").string();
+    ASSERT_TRUE(replayManager->StartRecording(afterPlaybackPath));
+    EXPECT_TRUE(replayManager->IsRecording());
+    EXPECT_FALSE(replayManager->GetPlaybackStatus(status));
+    ASSERT_TRUE(replayManager->StopRecording(true));
+
     auto* sceneManager = _context->GetSceneManager();
     sceneManager->setActiveScene(sceneManager->getGameScene());
     EXPECT_FALSE(replayManager->GetPlaybackEnd(progress));
@@ -522,6 +533,37 @@ TEST_F(NativeReplayClosure, ControlTraceReplaysToMatchingState)
     SetNativeSaveRoot({});
     SetNativeRecordingRoot({});
     gGamePaused = originalPaused;
+}
+
+TEST_F(NativeActionThroughline, NormalisationDoesNotRetainPlayingStatus)
+{
+    auto& state = OpenRCT2::getGameState();
+    const auto root = std::filesystem::temp_directory_path() / "parkbench-native-replay-normalisation";
+    std::filesystem::remove_all(root);
+    SetNativeRecordingRoot(root.string());
+    const auto inputPath = (root / "input.parkrep").string();
+    const auto outputPath = (root / "output.parkrep").string();
+
+    ASSERT_TRUE(StartNativeRecording(inputPath).ok);
+    state.currentTicks += 1;
+    ASSERT_TRUE(StopNativeRecording().ok);
+
+    auto* replayManager = _context->GetReplayManager();
+    ASSERT_TRUE(replayManager->NormaliseReplay(inputPath, outputPath));
+    while (replayManager->IsNormalising())
+    {
+        replayManager->Update();
+        if (replayManager->IsNormalising())
+            state.currentTicks++;
+    }
+
+    ReplayPlaybackStatus status{};
+    EXPECT_FALSE(replayManager->GetPlaybackStatus(status));
+    EXPECT_FALSE(replayManager->IsReplaying());
+    EXPECT_FALSE(replayManager->IsRecording());
+
+    std::filesystem::remove_all(root);
+    SetNativeRecordingRoot({});
 }
 
 TEST(NativeApiPolicy, SavePathsStayContained)

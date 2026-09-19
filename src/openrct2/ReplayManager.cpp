@@ -293,6 +293,10 @@ namespace OpenRCT2
             if (_mode != ReplayMode::NORMALISATION)
                 _mode = ReplayMode::RECORDING;
 
+            // A new recording supersedes any retained status from the previous
+            // playback. Keep the terminal status available while the replay is
+            // idle, but never let it shadow the recording notice.
+            _playbackStatus.reset();
             _currentRecording = std::move(replayData);
             _recordType = rt;
             _nextChecksumTick = currentTicks + 1;
@@ -541,8 +545,14 @@ namespace OpenRCT2
                 news->setFlags(News::ItemFlags::hasButton); // Has no subject.
             }
 
-            // When normalizing the output we don't touch the mode.
-            if (_mode != ReplayMode::NORMALISATION)
+            if (_mode == ReplayMode::NORMALISATION)
+            {
+                // Normalisation is an internal replay pass, not playback the
+                // caller can observe. Do not leave its transient Playing
+                // status behind after the pass ends.
+                _playbackStatus.reset();
+            }
+            else
             {
                 _mode = ReplayMode::NONE;
             }

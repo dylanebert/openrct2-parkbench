@@ -106,7 +106,8 @@ namespace OpenRCT2
         virtual bool GetPlaybackProgress(ReplayPlaybackProgress& progress) const = 0;
         // Progress at the moment the last normal playback ended; false before any playback has ended.
         virtual bool GetPlaybackEnd(ReplayPlaybackProgress& progress) const = 0;
-        // The engine-owned status is available during playback and remains available after it ends.
+        // The engine-owned status is available during playback and remains available after it ends,
+        // until a new recording or playback lifecycle starts.
         virtual bool GetPlaybackStatus(ReplayPlaybackStatus& status) const = 0;
         // Drops the end snapshot so it does not outlive the replayed park.
         virtual void ClearPlaybackEnd() = 0;
