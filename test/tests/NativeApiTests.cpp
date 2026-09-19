@@ -446,6 +446,84 @@ TEST_F(NativeReplayClosure, ForcedMismatchReportsDesynchronized)
     SetNativeRecordingRoot({});
 }
 
+TEST_F(NativeReplayClosure, ControlTraceReplaysToMatchingState)
+{
+    const auto originalPaused = gGamePaused;
+    gGamePaused |= GAME_PAUSED_NORMAL;
+
+    auto& state = OpenRCT2::getGameState();
+    const auto root = std::filesystem::temp_directory_path() / "parkbench-native-replay-control-trace";
+    std::filesystem::remove_all(root);
+    SetNativeSaveRoot(root.string());
+    SetNativeRecordingRoot(root.string());
+    const auto savePath = (root / "checkpoint.park").string();
+    const auto replayPath = (root / "control-trace.parkrep").string();
+
+    // Keep a state-bearing transient in the trace. It must be restored and
+    // compared by the canonical snapshot rather than treated as presentation.
+    OpenRCT2::MoneyEffect::CreateAt(1, { 100, 100, 0 }, false);
+    const auto exported = SaveNativeGame(savePath, state);
+    ASSERT_TRUE(exported.ok) << exported.message;
+
+    ASSERT_TRUE(StartNativeRecording(replayPath).ok);
+    const auto startTick = state.currentTicks;
+    const auto executed = ExecuteNativeAction("ParkSetNameAction", json_t{ { "name", "Trace Park" } }, state);
+    ASSERT_TRUE(executed.ok) << executed.message;
+    ASSERT_TRUE(executed.value["accepted"]) << executed.value.dump();
+    ASSERT_TRUE(gameStateAdvancePausedNativeMonitor(3));
+    const auto restoredDuringTrace = LoadNativeGame(savePath, state);
+    ASSERT_TRUE(restoredDuringTrace.ok) << restoredDuringTrace.message;
+    ASSERT_EQ(state.currentTicks, startTick);
+    ASSERT_TRUE(gameStateAdvancePausedNativeMonitor(3));
+    const auto recorded = StopNativeRecording();
+    ASSERT_TRUE(recorded.ok) << recorded.message;
+    ASSERT_EQ(recorded.value["commandCount"], 1u);
+    ASSERT_EQ(recorded.value["tickStart"], startTick);
+    ASSERT_EQ(recorded.value["tickEnd"], startTick + 3);
+
+    // Playback restores the recorded export before consuming the retained input.
+    auto* replayManager = _context->GetReplayManager();
+    ReplayPlaybackStatus status{};
+    ASSERT_NO_THROW(replayManager->StartPlayback(replayPath));
+    gGamePaused |= GAME_PAUSED_NORMAL;
+    ASSERT_TRUE(replayManager->GetPlaybackStatus(status));
+    EXPECT_EQ(status.Phase, ReplayPlaybackPhase::Playing);
+    EXPECT_EQ(status.CurrentTick, startTick);
+    EXPECT_EQ(status.TargetTick, startTick + 3);
+    EXPECT_EQ(status.ConsumedInputs, 0u);
+    EXPECT_EQ(status.TotalInputs, 1u);
+    EXPECT_EQ(status.Verdict, ReplayPlaybackVerdict::Pending);
+
+    // Use the same exact paused tick boundary for playback. The terminal
+    // comparison is performed at the target tick before any extra update.
+    while (replayManager->IsReplaying())
+    {
+        if (state.currentTicks < startTick + 3)
+        {
+            ASSERT_TRUE(gameStateAdvancePausedNativeMonitor(1));
+        }
+        else
+        {
+            replayManager->Update();
+        }
+    }
+
+    ASSERT_TRUE(replayManager->GetPlaybackStatus(status));
+    EXPECT_EQ(status.Phase, ReplayPlaybackPhase::Ended);
+    EXPECT_EQ(status.CurrentTick, startTick + 3);
+    EXPECT_EQ(status.TargetTick, startTick + 3);
+    EXPECT_EQ(status.ConsumedInputs, 1u);
+    EXPECT_EQ(status.TotalInputs, 1u);
+    EXPECT_EQ(status.Verdict, ReplayPlaybackVerdict::Synchronized);
+    EXPECT_TRUE(status.StructuralDifference.empty());
+    EXPECT_FALSE(replayManager->IsPlaybackStateMismatching());
+
+    std::filesystem::remove_all(root);
+    SetNativeSaveRoot({});
+    SetNativeRecordingRoot({});
+    gGamePaused = originalPaused;
+}
+
 TEST(NativeApiPolicy, SavePathsStayContained)
 {
     EXPECT_TRUE(NativePathContained("/tmp/parkbench-owned", "/tmp/parkbench-owned/save.park"));

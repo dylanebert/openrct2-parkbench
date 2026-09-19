@@ -29,6 +29,8 @@
 #include "../world/MapSelection.h"
 #include "../world/TileInspector.h"
 
+#include <cstdio>
+
 using namespace OpenRCT2;
 using namespace OpenRCT2::Drawing;
 using namespace OpenRCT2::Paint;
@@ -67,16 +69,38 @@ void Painter::Paint(IDrawingEngine& de)
 
     auto* replayManager = GetContext()->GetReplayManager();
     const char* text = nullptr;
+    char replayText[160]{};
+    bool blink = true;
 
-    if (replayManager->IsReplaying() && !gSilentReplays)
-        text = "Replaying...";
+    ReplayPlaybackStatus playbackStatus{};
+    if (!gSilentReplays && replayManager->GetPlaybackStatus(playbackStatus)
+        && playbackStatus.Phase != ReplayPlaybackPhase::Idle)
+    {
+        const bool desynchronised = playbackStatus.Verdict == ReplayPlaybackVerdict::Desynchronized;
+        if (playbackStatus.Phase == ReplayPlaybackPhase::Playing)
+        {
+            snprintf(
+                replayText, sizeof(replayText), "Replay %s %u/%u, inputs %u/%u",
+                desynchronised ? "desynchronized" : "playing", playbackStatus.CurrentTick,
+                playbackStatus.TargetTick, playbackStatus.ConsumedInputs, playbackStatus.TotalInputs);
+        }
+        else
+        {
+            snprintf(
+                replayText, sizeof(replayText), "Replay %s at %u, inputs %u/%u",
+                desynchronised ? "desynchronized" : "synchronized", playbackStatus.CurrentTick,
+                playbackStatus.ConsumedInputs, playbackStatus.TotalInputs);
+        }
+        text = replayText;
+        blink = false;
+    }
     else if (replayManager->ShouldDisplayNotice())
         text = "Recording...";
     else if (replayManager->IsNormalising())
         text = "Normalising...";
 
     if (text != nullptr)
-        PaintReplayNotice(*rt, text);
+        PaintReplayNotice(*rt, text, blink);
 
     if (Config::Get().general.showFPS)
     {
@@ -85,17 +109,17 @@ void Painter::Paint(IDrawingEngine& de)
     gCurrentDrawCount++;
 }
 
-void Painter::PaintReplayNotice(RenderTarget& rt, const char* text)
+void Painter::PaintReplayNotice(RenderTarget& rt, const char* text, bool blink)
 {
     ScreenCoordsXY screenCoords(_uiContext.GetWidth() / 2, _uiContext.GetHeight() - 44);
 
-    char buffer[64]{};
+    char buffer[192]{};
     FormatStringToBuffer(buffer, sizeof(buffer), "{OUTLINE}{RED}{STRING}", text);
 
     auto stringWidth = getStringWidth(buffer, FontStyle::medium);
     screenCoords.x = screenCoords.x - stringWidth;
 
-    if (((getGameState().currentTicks >> 1) & 0xF) > 4)
+    if (!blink || ((getGameState().currentTicks >> 1) & 0xF) > 4)
         drawText(rt, screenCoords, buffer, { OpenRCT2::Drawing::Colour::saturatedRed });
 
     // Make area dirty so the text doesn't get drawn over the last

@@ -394,10 +394,9 @@ namespace OpenRCT2
 
         std::string LoadAndCompareSnapshot(MemoryStream& snapshotStream)
         {
-            // StartPlayback also compares the initial snapshot. Reset the
-            // stream so the terminal comparison reads the same snapshot
-            // rather than silently trying to deserialize at EOF.
-            snapshotStream.SetPosition(0);
+            // The recording stores its initial and final snapshots back-to-back.
+            // Leave the stream cursor at the boundary consumed by the previous
+            // comparison so playback compares the matching terminal snapshot.
             DataSerialiser ds(false, snapshotStream);
 
             IGameStateSnapshots* snapshots = GetContext()->GetGameStateSnapshots();
@@ -521,6 +520,12 @@ namespace OpenRCT2
             {
                 ReplayPlaybackProgress end{};
                 GetPlaybackProgress(end);
+                if (end.CommandsPlayed != end.TotalCommands)
+                {
+                    MarkPlaybackDesynchronized(FormatString(
+                        "Replay ended before consuming all inputs: consumed %u of %u", end.CommandsPlayed,
+                        end.TotalCommands));
+                }
                 _playbackEnd = end;
                 _playbackStatus = ReplayPlaybackStatus{
                     ReplayPlaybackPhase::Ended,

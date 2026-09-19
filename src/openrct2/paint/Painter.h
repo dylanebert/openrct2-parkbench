@@ -50,7 +50,7 @@ namespace OpenRCT2
             ~Painter();
 
         private:
-            void PaintReplayNotice(Drawing::RenderTarget& rt, const char* text);
+            void PaintReplayNotice(Drawing::RenderTarget& rt, const char* text, bool blink);
             void PaintFPS(Drawing::RenderTarget& rt);
             void MeasureFPS();
         };
