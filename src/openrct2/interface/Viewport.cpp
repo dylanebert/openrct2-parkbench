@@ -903,11 +903,10 @@ namespace OpenRCT2
         worldRT.height = height;
         worldRT.pitch = rt.LineStride() - worldRT.width;
         worldRT.zoom_level = viewport->zoom;
-        worldRT.RideDiagnostic = rt.RideDiagnostic;
 
         _paintColumns.clear();
 
-        bool useMultithreading = rt.RideDiagnostic == nullptr && Config::Get().general.multiThreading;
+        bool useMultithreading = Config::Get().general.multiThreading;
         if (useMultithreading && _paintJobs == nullptr)
         {
             _paintJobs = std::make_unique<JobPool>();

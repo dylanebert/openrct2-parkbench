@@ -13,10 +13,8 @@
 #include "../../../ride/Ride.h"
 #include "../../../ride/RideEntry.h"
 #include "../../../ride/TrackPaint.h"
-#include "../../../ride/TrackStyle.h"
 #include "../../../ride/Vehicle.h"
 #include "../../Paint.h"
-#include "../../RideRenderDiagnostic.h"
 #include "../../support/WoodenSupports.h"
 #include "../../tile_element/Segment.h"
 #include "../../track/Segment.h"
@@ -58,36 +56,15 @@ static void PaintRiders(
 
 static void PaintCarousel(
     PaintSession& session, const Ride& ride, uint8_t direction, int8_t xOffset, int8_t yOffset, uint16_t height,
-    ImageId stationColour, TrackElemType trackType)
+    ImageId stationColour)
 {
     height += 7;
 
-    auto* diagnostic = session.RideDiagnostic;
-    FlatRideSelectionAttempt attempt;
-    attempt.rideType = static_cast<uint16_t>(ride.type);
-    attempt.rideEntry = ride.subtype;
-    attempt.trackStyle = EnumValue(TrackStyle::merryGoRound);
-    attempt.trackType = EnumValue(trackType);
-    attempt.dispatcherReached = true;
-    attempt.diagnosticAvailable = diagnostic != nullptr;
-
     auto rideEntry = ride.getRideEntry();
-    attempt.rideEntryFound = rideEntry != nullptr;
     if (rideEntry == nullptr)
-    {
-        attempt.reason = FlatRideSelectionAttemptReason::rideEntryMissing;
-        if (diagnostic != nullptr)
-            diagnostic->RecordFlatRideSelectionAttempt(attempt);
         return;
-    }
 
     auto vehicle = getGameState().entities.GetEntity<Vehicle>(ride.vehicles[0]);
-    attempt.onTrack = ride.flags.has(RideFlag::onTrack);
-    attempt.vehicleFound = vehicle != nullptr;
-    if (!attempt.onTrack)
-        attempt.reason = FlatRideSelectionAttemptReason::notOnTrack;
-    else if (vehicle == nullptr)
-        attempt.reason = FlatRideSelectionAttemptReason::vehicleMissing;
     if (ride.flags.has(RideFlag::onTrack) && vehicle != nullptr)
     {
         session.InteractionType = ViewportInteractionItem::entity;
@@ -117,56 +94,7 @@ static void PaintCarousel(
     }
     auto imageOffset = rotationOffset & 0x1F;
     auto imageId = imageTemplate.WithIndex(rideEntry->Cars[0].base_image_id + imageOffset);
-    auto* paintStruct = PaintAddImageAsParent(session, imageId, offset, bb);
-
-    if (diagnostic != nullptr && attempt.onTrack && vehicle != nullptr)
-    {
-        attempt.paintStructFound = paintStruct != nullptr;
-        if (!attempt.paintStructFound)
-        {
-            attempt.reason = FlatRideSelectionAttemptReason::paintStructMissing;
-        }
-        else
-        {
-            FlatRideSpriteSelection selection{
-                paintStruct->DiagnosticSource,
-                paintStruct->DiagnosticComponentOrdinal,
-                vehicle->flatRideAnimationFrame,
-                vehicle->current_time,
-                vehicle->sub_state,
-                static_cast<uint8_t>(vehicle->status),
-                vehicle->orientation,
-                static_cast<uint8_t>(ride.vehicleColours[0].Body),
-                static_cast<uint8_t>(ride.vehicleColours[0].Trim),
-                imageId.GetRemap(),
-                static_cast<uint8_t>(imageId.GetSecondary()),
-                static_cast<uint8_t>(((vehicle->orientation >> 3) + session.CurrentRotation) % 4),
-                rideEntry->Cars[0].base_image_id,
-                static_cast<uint32_t>(imageOffset),
-                static_cast<uint32_t>(imageId.GetIndex()),
-                RideRenderDiagnostic::StableSpriteIdentity(imageId),
-                static_cast<uint16_t>(ride.type),
-                ride.subtype,
-                EnumValue(TrackStyle::merryGoRound),
-                EnumValue(trackType),
-            };
-            attempt.selection = selection;
-            attempt.sourceComponentJoined = diagnostic->HasPaintRecord(
-                selection.source, selection.componentOrdinal);
-            attempt.recordCalled = true;
-            const auto result = diagnostic->TryRecordFlatRideSelection(selection);
-            attempt.recordAccepted = result == FlatRideSelectionRecordResult::recorded;
-            attempt.reason = attempt.recordAccepted
-                ? FlatRideSelectionAttemptReason::recorded
-                : !attempt.sourceComponentJoined ? FlatRideSelectionAttemptReason::sourceComponentMissing
-                                                 : FlatRideSelectionAttemptReason::recordRejected;
-        }
-        diagnostic->RecordFlatRideSelectionAttempt(attempt);
-    }
-    else if (diagnostic != nullptr && attempt.reason != FlatRideSelectionAttemptReason::recordRejected)
-    {
-        diagnostic->RecordFlatRideSelectionAttempt(attempt);
-    }
+    PaintAddImageAsParent(session, imageId, offset, bb);
 
     if (vehicle != nullptr && vehicle->num_peeps > 0)
     {
@@ -201,22 +129,22 @@ static void PaintMerryGoRound(
     switch (trackSequence)
     {
         case 1:
-            PaintCarousel(session, ride, direction, 32, 32, height, stationColour, trackElement.GetTrackType());
+            PaintCarousel(session, ride, direction, 32, 32, height, stationColour);
             break;
         case 3:
-            PaintCarousel(session, ride, direction, 32, -32, height, stationColour, trackElement.GetTrackType());
+            PaintCarousel(session, ride, direction, 32, -32, height, stationColour);
             break;
         case 5:
-            PaintCarousel(session, ride, direction, 0, -32, height, stationColour, trackElement.GetTrackType());
+            PaintCarousel(session, ride, direction, 0, -32, height, stationColour);
             break;
         case 6:
-            PaintCarousel(session, ride, direction, -32, 32, height, stationColour, trackElement.GetTrackType());
+            PaintCarousel(session, ride, direction, -32, 32, height, stationColour);
             break;
         case 7:
-            PaintCarousel(session, ride, direction, -32, -32, height, stationColour, trackElement.GetTrackType());
+            PaintCarousel(session, ride, direction, -32, -32, height, stationColour);
             break;
         case 8:
-            PaintCarousel(session, ride, direction, -32, 0, height, stationColour, trackElement.GetTrackType());
+            PaintCarousel(session, ride, direction, -32, 0, height, stationColour);
             break;
     }
 

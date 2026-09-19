@@ -29,8 +29,6 @@
 #include "../world/MapSelection.h"
 #include "../world/TileInspector.h"
 
-#include <cstdio>
-
 using namespace OpenRCT2;
 using namespace OpenRCT2::Drawing;
 using namespace OpenRCT2::Paint;
@@ -69,30 +67,16 @@ void Painter::Paint(IDrawingEngine& de)
 
     auto* replayManager = GetContext()->GetReplayManager();
     const char* text = nullptr;
-    char replayText[128]{};
-    ReplayPlaybackProgress progress{};
 
-    if (replayManager->IsReplaying() && !gSilentReplays && replayManager->GetPlaybackProgress(progress))
-    {
-        snprintf(
-            replayText, sizeof(replayText), "Replaying tick %u/%u, commands %u/%u", progress.TicksPlayed,
-            progress.TotalTicks, progress.CommandsPlayed, progress.TotalCommands);
-        PaintReplayNotice(*rt, replayText, false);
-    }
+    if (replayManager->IsReplaying() && !gSilentReplays)
+        text = "Replaying...";
     else if (replayManager->ShouldDisplayNotice())
         text = "Recording...";
     else if (replayManager->IsNormalising())
         text = "Normalising...";
-    else if (!gSilentReplays && replayManager->GetPlaybackEnd(progress))
-    {
-        snprintf(
-            replayText, sizeof(replayText), "Replay ended at tick %u, commands %u/%u", progress.Tick,
-            progress.CommandsPlayed, progress.TotalCommands);
-        PaintReplayNotice(*rt, replayText, false);
-    }
 
     if (text != nullptr)
-        PaintReplayNotice(*rt, text, true);
+        PaintReplayNotice(*rt, text);
 
     if (Config::Get().general.showFPS)
     {
@@ -101,17 +85,17 @@ void Painter::Paint(IDrawingEngine& de)
     gCurrentDrawCount++;
 }
 
-void Painter::PaintReplayNotice(RenderTarget& rt, const char* text, bool blink)
+void Painter::PaintReplayNotice(RenderTarget& rt, const char* text)
 {
     ScreenCoordsXY screenCoords(_uiContext.GetWidth() / 2, _uiContext.GetHeight() - 44);
 
-    char buffer[160]{};
+    char buffer[64]{};
     FormatStringToBuffer(buffer, sizeof(buffer), "{OUTLINE}{RED}{STRING}", text);
 
     auto stringWidth = getStringWidth(buffer, FontStyle::medium);
     screenCoords.x = screenCoords.x - stringWidth;
 
-    if (!blink || ((getGameState().currentTicks >> 1) & 0xF) > 4)
+    if (((getGameState().currentTicks >> 1) & 0xF) > 4)
         drawText(rt, screenCoords, buffer, { OpenRCT2::Drawing::Colour::saturatedRed });
 
     // Make area dirty so the text doesn't get drawn over the last
@@ -209,7 +193,6 @@ PaintSession* Painter::CreateSession(RenderTarget& rt, uint32_t viewFlags, uint8
     session->InteractionType = ViewportInteractionItem::none;
     session->PathElementOnSameHeight = nullptr;
     session->TrackElementOnSameHeight = nullptr;
-    session->RideDiagnostic = rt.RideDiagnostic;
 
     return session;
 }

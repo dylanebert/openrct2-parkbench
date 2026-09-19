@@ -20,7 +20,6 @@
 #include "../config/Config.h"
 #include "../core/Console.hpp"
 #include "../core/EnumUtils.hpp"
-#include "../core/Crypt.h"
 #include "../core/File.h"
 #include "../core/Imaging.h"
 #include "../core/Path.hpp"
@@ -632,12 +631,6 @@ static std::string ResolveFilenameForCapture(const fs::path& filename)
 
 void CaptureImage(const CaptureOptions& options)
 {
-    CaptureImage(options, nullptr, nullptr);
-}
-
-void CaptureImage(
-    const CaptureOptions& options, OpenRCT2::RideRenderDiagnostic* diagnostic, std::string* softwareSurfaceHash)
-{
     Viewport viewport{};
     if (options.View.has_value())
     {
@@ -664,13 +657,7 @@ void CaptureImage(
 
     auto outputPath = ResolveFilenameForCapture(options.Filename);
     auto rt = CreateRT(viewport);
-    rt.RideDiagnostic = diagnostic;
     RenderViewport(nullptr, viewport, rt);
-    if (softwareSurfaceHash != nullptr)
-    {
-        const auto bytes = static_cast<size_t>(rt.LineStride()) * static_cast<size_t>(rt.height);
-        *softwareSurfaceHash = String::StringFromHex(Crypt::SHA256(rt.bits, bytes));
-    }
     WriteRTToFile(outputPath, rt, gPalette);
     ReleaseRT(rt);
 }

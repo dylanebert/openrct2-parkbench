@@ -1240,15 +1240,7 @@ namespace OpenRCT2
             {
                 const auto path = request->params.value("path", "");
                 const auto view = request->params.value("view", json_t(nullptr));
-                if (request->params.contains("diagnostic") && !request->params["diagnostic"].is_boolean())
-                {
-                    _nativeMonitor->SendError(
-                        request->id, sequence, tickBefore, pausedBefore, "capture_diagnostic_invalid",
-                        "capture diagnostic must be a boolean");
-                    return;
-                }
-                const auto diagnostic = request->params.value("diagnostic", false);
-                const auto dispatch = CommandLine::CaptureNativeFrame(path, view, diagnostic);
+                const auto dispatch = CommandLine::CaptureNativeFrame(path, view);
                 if (dispatch.ok)
                     _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
                 else
