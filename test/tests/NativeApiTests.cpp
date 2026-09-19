@@ -587,6 +587,47 @@ TEST_F(NativeActionThroughline, NativeFlagsRemainDispatcherOwned)
     EXPECT_EQ(descriptor["policy"]["flags"], "native-controlled");
 }
 
+TEST_F(NativeActionThroughline, NativeSaveMutateLoadRestoresAuthoritativePark)
+{
+    const auto originalPaused = gGamePaused;
+    gGamePaused |= GAME_PAUSED_NORMAL;
+    auto& state = OpenRCT2::getGameState();
+    const auto root = std::filesystem::temp_directory_path() / "parkbench-native-save-load";
+    std::filesystem::remove_all(root);
+    SetNativeSaveRoot(root.string());
+    const auto path = (root / "round-trip.park").string();
+
+    const auto savedState = ReadNativeResource("park", json_t::object(), state);
+    ASSERT_TRUE(savedState.ok) << savedState.message;
+    const auto saved = SaveNativeGame(path, state);
+    ASSERT_TRUE(saved.ok) << saved.message;
+    ASSERT_EQ(saved.value["tick"], state.currentTicks);
+
+    const auto mutated = ExecuteNativeAction("ParkSetNameAction", json_t{ { "name", "Mutated Park" } }, state);
+    ASSERT_TRUE(mutated.ok) << mutated.message;
+    ASSERT_TRUE(mutated.value["accepted"]) << mutated.value.dump();
+    const auto mutatedState = ReadNativeResource("park", json_t::object(), state);
+    ASSERT_TRUE(mutatedState.ok) << mutatedState.message;
+    EXPECT_EQ(mutatedState.value["name"], "Mutated Park");
+    EXPECT_NE(mutatedState.value["name"], savedState.value["name"]);
+
+    const auto restored = LoadNativeGame(path, state);
+    ASSERT_TRUE(restored.ok) << restored.message;
+    EXPECT_TRUE(GameIsPaused());
+    EXPECT_EQ(restored.value["tick"], saved.value["tick"]);
+    EXPECT_EQ(state.currentTicks, saved.value["tick"]);
+
+    const auto restoredState = ReadNativeResource("park", json_t::object(), state);
+    ASSERT_TRUE(restoredState.ok) << restoredState.message;
+    EXPECT_EQ(restoredState.value["name"], savedState.value["name"]);
+    EXPECT_EQ(restoredState.value["cash"], savedState.value["cash"]);
+    EXPECT_EQ(restoredState.value["entranceFee"], savedState.value["entranceFee"]);
+
+    std::filesystem::remove_all(root);
+    SetNativeSaveRoot({});
+    gGamePaused = originalPaused;
+}
+
 TEST_F(NativeActionThroughline, SynchronousExecuteIsRecordedIntoActiveReplay)
 {
     auto& state = OpenRCT2::getGameState();

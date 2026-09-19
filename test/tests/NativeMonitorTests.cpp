@@ -45,7 +45,7 @@ TEST(NativeMonitorProtocol, FrameBoundsAndGreetingAreBounded)
     EXPECT_EQ(
         greeting["capabilities"],
         json_t({ "ping", "status", "step", "stop", "resource.list", "resource.describe", "resource.read",
-                 "action.list", "action.describe", "action.query", "action.execute", "save",
+                 "action.list", "action.describe", "action.query", "action.execute", "save", "load",
                  "record.start", "record.status", "record.stop", "capture" }));
 }
 

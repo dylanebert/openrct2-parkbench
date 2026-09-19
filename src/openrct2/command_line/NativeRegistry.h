@@ -54,6 +54,7 @@ namespace OpenRCT2
             std::string_view name, const json_t& args, GameState_t& state);
 
         NativeDispatchResult SaveNativeGame(std::string_view path, GameState_t& state);
+        NativeDispatchResult LoadNativeGame(std::string_view path, GameState_t& state);
         bool NativePathContained(std::string_view root, std::string_view path);
         void SetNativeSaveRoot(std::string root);
         void SetNativeRecordingRoot(std::string root);

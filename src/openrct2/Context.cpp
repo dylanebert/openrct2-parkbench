@@ -1264,6 +1264,23 @@ namespace OpenRCT2
                     _nativeMonitor->SendError(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code, dispatch.message, dispatch.detail);
                 return;
             }
+            if (request->method == "load")
+            {
+                if (!pausedBefore)
+                {
+                    _nativeMonitor->SendError(
+                        request->id, sequence, tickBefore, pausedBefore, "paused_required",
+                        "load is only accepted at the paused simulation boundary");
+                    return;
+                }
+                const auto path = request->params.value("path", "");
+                const auto dispatch = CommandLine::LoadNativeGame(path, getGameState());
+                if (dispatch.ok)
+                    _nativeMonitor->SendSuccess(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.value);
+                else
+                    _nativeMonitor->SendError(request->id, sequence, getGameState().currentTicks, GameIsPaused(), dispatch.code, dispatch.message, dispatch.detail);
+                return;
+            }
             if (request->method == "stop")
             {
                 const bool sent = _nativeMonitor->SendSuccess(

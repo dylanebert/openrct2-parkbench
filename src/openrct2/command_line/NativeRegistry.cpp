@@ -812,6 +812,28 @@ namespace OpenRCT2::CommandLine
         return Success({ { "path", path }, { "tick", state.currentTicks } });
     }
 
+    NativeDispatchResult LoadNativeGame(std::string_view path, GameState_t& state)
+    {
+        if (!GameIsPaused())
+            return Failure("paused_required", "load is only accepted while the engine is paused");
+        const auto root = CopyNativeRoot(gSaveRoot);
+        if (!NativePathContained(root, path))
+            return Failure("load_containment", "load path must remain below the owned native save root", {
+                { "root", root },
+                { "path", path },
+            });
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(std::filesystem::path(path), error) || error)
+            return Failure("load_failed", "the native save path does not identify a regular file", { { "path", path } });
+        if (GetContext() == nullptr || !GetContext()->LoadParkFromFile(std::string(path), false, false))
+            return Failure("load_failed", "the engine rejected the save", { { "path", path } });
+
+        // Native load is a paused-boundary operation. A save made through this
+        // API carries that bit, but retain the contract even for an older file.
+        gGamePaused |= GAME_PAUSED_NORMAL;
+        return Success({ { "path", path }, { "tick", state.currentTicks }, { "paused", GameIsPaused() } });
+    }
+
     void SetNativeSaveRoot(std::string root)
     {
         std::lock_guard lock(gNativeRootsMutex);
