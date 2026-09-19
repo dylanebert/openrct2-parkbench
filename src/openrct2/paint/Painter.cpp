@@ -76,23 +76,22 @@ void Painter::Paint(IDrawingEngine& de)
     if (!gSilentReplays && replayManager->GetPlaybackStatus(playbackStatus)
         && playbackStatus.Phase != ReplayPlaybackPhase::Idle)
     {
-        const bool desynchronised = playbackStatus.Verdict == ReplayPlaybackVerdict::Desynchronized;
         if (playbackStatus.Phase == ReplayPlaybackPhase::Playing)
         {
             snprintf(
-                replayText, sizeof(replayText), "Replay %s %u/%u, inputs %u/%u",
-                desynchronised ? "desynchronized" : "playing", playbackStatus.CurrentTick,
+                replayText, sizeof(replayText), "Replay playing %u/%u, inputs %u/%u", playbackStatus.CurrentTick,
                 playbackStatus.TargetTick, playbackStatus.ConsumedInputs, playbackStatus.TotalInputs);
+            text = replayText;
+            blink = false;
         }
-        else
+        else if (playbackStatus.Verdict == ReplayPlaybackVerdict::Desynchronized)
         {
             snprintf(
-                replayText, sizeof(replayText), "Replay %s at %u, inputs %u/%u",
-                desynchronised ? "desynchronized" : "synchronized", playbackStatus.CurrentTick,
+                replayText, sizeof(replayText), "Replay failed at %u, inputs %u/%u", playbackStatus.CurrentTick,
                 playbackStatus.ConsumedInputs, playbackStatus.TotalInputs);
+            text = replayText;
+            blink = false;
         }
-        text = replayText;
-        blink = false;
     }
     else if (replayManager->ShouldDisplayNotice())
         text = "Recording...";

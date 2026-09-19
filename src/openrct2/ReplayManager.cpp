@@ -541,8 +541,11 @@ namespace OpenRCT2
                                                   : ReplayPlaybackVerdict::Synchronized,
                     _playbackDifference,
                 };
-                News::Item* news = News::AddItemToQueue(News::ItemType::blank, "Replay playback complete", 0);
-                news->setFlags(News::ItemFlags::hasButton); // Has no subject.
+                if (!IsPlaybackStateMismatching())
+                {
+                    News::Item* news = News::AddItemToQueue(News::ItemType::blank, "Replay playback complete", 0);
+                    news->setFlags(News::ItemFlags::hasButton); // Has no subject.
+                }
             }
 
             if (_mode == ReplayMode::NORMALISATION)
