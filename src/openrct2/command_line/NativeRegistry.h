@@ -21,8 +21,6 @@ namespace OpenRCT2
             json_t schema;
             json_t units;
             const char* authority;
-            json_t inputs;
-            const char* capability;
             std::function<json_t(const json_t&, GameState_t&)> read;
         };
 
@@ -33,9 +31,6 @@ namespace OpenRCT2
             std::string description;
             json_t schema;
             json_t units;
-            const char* authority;
-            json_t inputs;
-            const char* capability;
         };
 
         struct NativeDispatchResult
@@ -47,7 +42,7 @@ namespace OpenRCT2
             json_t detail = json_t::object();
         };
 
-        const std::array<NativeResourceDescriptor, 12>& NativeResources();
+        const std::array<NativeResourceDescriptor, 11>& NativeResources();
         std::vector<NativeActionDescriptor> NativeActions();
         json_t NativeResourceDescriptorJson(const NativeResourceDescriptor& descriptor);
         json_t NativeActionDescriptorJson(const NativeActionDescriptor& descriptor);
@@ -61,11 +56,8 @@ namespace OpenRCT2
         NativeDispatchResult SaveNativeGame(std::string_view path, GameState_t& state);
         bool NativePathContained(std::string_view root, std::string_view path);
         void SetNativeSaveRoot(std::string root);
-        std::string NativeSaveRoot();
         void SetNativeRecordingRoot(std::string root);
-        std::string NativeRecordingRoot();
         void SetNativeCaptureRoot(std::string root);
-        std::string NativeCaptureRoot();
         NativeDispatchResult StartNativeRecording(std::string_view path);
         NativeDispatchResult StopNativeRecording();
         NativeDispatchResult CaptureNativeFrame(

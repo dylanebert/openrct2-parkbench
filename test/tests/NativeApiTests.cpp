@@ -47,7 +47,7 @@ using json_t = nlohmann::json;
 TEST(NativeApiRegistry, HasOneExactInitialResourcePopulation)
 {
     const std::vector<std::string> expected{
-        "session", "park", "date", "finance", "rides", "ride", "vehicle", "guests", "guest", "objects", "tile", "region",
+        "session", "park", "date", "finance", "rides", "ride", "vehicle", "guests", "guest", "objects", "tile",
     };
     std::vector<std::string> actual;
     for (const auto& descriptor : NativeResources())
@@ -63,18 +63,15 @@ TEST(NativeApiRegistry, ResourceDescriptorsDeclareSchemaUnitsAuthorityInputsAndC
         EXPECT_NE(descriptor.description, nullptr);
         EXPECT_TRUE(descriptor.schema.is_object());
         EXPECT_TRUE(descriptor.units.is_object());
-        EXPECT_FALSE(std::string(descriptor.authority).empty());
-        EXPECT_TRUE(descriptor.inputs.is_array() || descriptor.inputs.is_object());
-        EXPECT_NE(descriptor.capability, nullptr);
         EXPECT_TRUE(static_cast<bool>(descriptor.read));
         const auto json = NativeResourceDescriptorJson(descriptor);
+        EXPECT_FALSE(json["authority"].get<std::string>().empty());
+        EXPECT_EQ(json["classification"], "authoritative");
+        EXPECT_TRUE(json["inputs"].is_array());
+        EXPECT_EQ(json["capability"], "native");
         EXPECT_TRUE(json.contains("description"));
         EXPECT_TRUE(json.contains("schema"));
         EXPECT_TRUE(json.contains("units"));
-        EXPECT_TRUE(json.contains("authority"));
-        EXPECT_TRUE(json.contains("classification"));
-        EXPECT_TRUE(json.contains("inputs"));
-        EXPECT_TRUE(json.contains("capability"));
     }
 }
 
@@ -90,10 +87,10 @@ TEST(NativeApiRegistry, ActionDescriptorsComeFromNativeActionRegistrations)
         EXPECT_TRUE(descriptor.schema.contains("properties"));
         EXPECT_TRUE(descriptor.schema.contains("required"));
         EXPECT_TRUE(descriptor.units.is_object());
-        EXPECT_EQ(descriptor.authority, "engine");
-        EXPECT_EQ(descriptor.capability, "native");
         const auto json = NativeActionDescriptorJson(descriptor);
-        EXPECT_TRUE(json.contains("inputs"));
+        EXPECT_EQ(json["authority"], "engine");
+        EXPECT_EQ(json["capability"], "native");
+        EXPECT_TRUE(json["inputs"].is_array());
         EXPECT_TRUE(json.contains("policy"));
     }
 }

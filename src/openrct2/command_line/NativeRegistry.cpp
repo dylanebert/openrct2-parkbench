@@ -39,10 +39,16 @@ namespace OpenRCT2::CommandLine
     namespace
     {
         using json_t = nlohmann::json;
-        std::mutex gSaveRootMutex;
+        std::mutex gNativeRootsMutex;
         std::string gSaveRoot;
         std::string gRecordingRoot;
         std::string gCaptureRoot;
+
+        std::string CopyNativeRoot(const std::string& root)
+        {
+            std::lock_guard lock(gNativeRootsMutex);
+            return root;
+        }
 
         json_t ObjectSchema(json_t properties, json_t required = json_t::array())
         {
@@ -658,53 +664,39 @@ namespace OpenRCT2::CommandLine
             return result;
         }
 
-        json_t ReadRegion(const json_t&, GameState_t& state)
-        {
-            // This is intentionally a named derived projection. It exposes the
-            // engine map boundary and its inputs rather than inventing reachability.
-            return {
-                { "mapWidth", state.mapSize.x },
-                { "mapHeight", state.mapSize.y },
-                { "algorithm", "map-boundary" },
-                { "inputs", { "mapSize" } },
-            };
-        }
-
-        const std::array<NativeResourceDescriptor, 12> kResources = {
+        const std::array<NativeResourceDescriptor, 11> kResources = {
             NativeResourceDescriptor{
                 "session", "Current native engine session state.", ObjectSchema({}), { { "tick", "ticks" }, { "sequence", "requests" } },
-                "engine", json_t::array(), "native", [](const json_t&, GameState_t& state) {
+                "engine", [](const json_t&, GameState_t& state) {
                     return json_t{ { "tick", state.currentTicks }, { "paused", GameIsPaused() } };
                 } },
             { "park", "Authoritative park state.", EmptySchema(), { { "cash", "money" }, { "entranceFee", "money" }, { "rating", "rating" } },
-                "engine", json_t::array(), "native", ReadPark },
+                "engine", ReadPark },
             { "date", "Authoritative simulation calendar.", EmptySchema(), { { "day", "days" }, { "month", "months" }, { "year", "years" } },
-                "engine", json_t::array(), "native", ReadDate },
+                "engine", ReadDate },
             { "finance", "Authoritative park finance state.", EmptySchema(), { { "cash", "money" }, { "bankLoan", "money" } },
-                "engine", json_t::array(), "native", ReadFinance },
+                "engine", ReadFinance },
             { "rides", "Authoritative collection of rides.", EmptySchema(), { { "id", "ride" }, { "price", "money" } },
-                "engine", json_t::array(), "native", ReadRides },
+                "engine", ReadRides },
             { "ride", "Authoritative state for one ride.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } }, "engine", json_t::array(), "native", ReadRide },
+                { { "id", "ride" }, { "price", "money" }, { "vehicleIds", "entity" } }, "engine", ReadRide },
             { "vehicle", "Authoritative state for one ride vehicle.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
                 { { "id", "entity" }, { "ride", "ride" }, { "x", "map-units" }, { "trackProgress", "track-progress" },
                   { "numPeeps", "raw-engine-active-span" },
                   { "nextFreeSeat", "raw-engine-active-span" } },
-                "engine", json_t::array(), "native", ReadVehicle },
+                "engine", ReadVehicle },
             { "guests", "Authoritative collection of guest entities.", EmptySchema(), { { "id", "entity" }, { "x", "map-units" } },
-                "engine", json_t::array(), "native", ReadGuests },
+                "engine", ReadGuests },
             { "guest", "Authoritative state for one guest entity.", ObjectSchema({ { "id", { { "type", "integer" }, { "minimum", 0 } } } }, { "id" }),
-                { { "id", "entity" }, { "x", "map-units" } }, "engine", json_t::array(), "native", ReadGuest },
+                { { "id", "entity" }, { "x", "map-units" } }, "engine", ReadGuest },
             { "objects", "Authoritative loaded object identities.", EmptySchema(), { { "count", "objects" } },
-                "engine", json_t::array(), "native", ReadObjects },
+                "engine", ReadObjects },
             { "tile", "Authoritative surface and optional path state at a map tile.", ObjectSchema({ { "x", { { "type", "integer" } } }, { "y", { { "type", "integer" } } }, { "includePath", { { "type", "boolean" } } }, { "includeElements", { { "type", "boolean" } } } }, { "x", "y" }),
-                { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" }, { "elements", "ordered" } }, "engine", json_t::array(), "native", ReadTile },
-            { "region", "Derived map-boundary projection from mapSize.", EmptySchema(), { { "mapWidth", "map-units" }, { "mapHeight", "map-units" } },
-                "derived", { "mapSize" }, "native", ReadRegion },
+                { { "x", "map-units" }, { "y", "map-units" }, { "waterHeight", "height-units" }, { "elements", "ordered" } }, "engine", ReadTile },
         };
     }
 
-    const std::array<NativeResourceDescriptor, 12>& NativeResources()
+    const std::array<NativeResourceDescriptor, 11>& NativeResources()
     {
         return kResources;
     }
@@ -717,9 +709,9 @@ namespace OpenRCT2::CommandLine
             { "schema", descriptor.schema },
             { "units", descriptor.units },
             { "authority", descriptor.authority },
-            { "classification", descriptor.authority == std::string_view("derived") ? "derived" : "authoritative" },
-            { "inputs", descriptor.inputs },
-            { "capability", descriptor.capability },
+            { "classification", "authoritative" },
+            { "inputs", json_t::array() },
+            { "capability", "native" },
         };
     }
 
@@ -737,9 +729,6 @@ namespace OpenRCT2::CommandLine
                 std::string("Native engine Game Action ") + registration.name + ".",
                 ObjectSchema(std::move(visitor.properties), std::move(visitor.required)),
                 { { "x", "map-units" }, { "y", "map-units" }, { "z", "height-units" }, { "cost", "money" } },
-                "engine",
-                json_t::array(),
-                "native",
             });
         }
         return result;
@@ -753,10 +742,10 @@ namespace OpenRCT2::CommandLine
             { "description", descriptor.description },
             { "schema", descriptor.schema },
             { "units", descriptor.units },
-            { "authority", descriptor.authority },
+            { "authority", "engine" },
             { "classification", "effect" },
-            { "inputs", descriptor.inputs },
-            { "capability", descriptor.capability },
+            { "inputs", json_t::array() },
+            { "capability", "native" },
             { "policy", { { "flags", "native-controlled" } } },
         };
     }
@@ -808,7 +797,7 @@ namespace OpenRCT2::CommandLine
     {
         if (!GameIsPaused())
             return Failure("paused_required", "save is only accepted while the engine is paused");
-        const auto root = NativeSaveRoot();
+        const auto root = CopyNativeRoot(gSaveRoot);
         if (!NativePathContained(root, path))
             return Failure("save_containment", "save path must remain below the owned native save root", {
                 { "root", root },
@@ -825,50 +814,32 @@ namespace OpenRCT2::CommandLine
 
     void SetNativeSaveRoot(std::string root)
     {
-        std::lock_guard lock(gSaveRootMutex);
+        std::lock_guard lock(gNativeRootsMutex);
         gSaveRoot = std::move(root);
-    }
-
-    std::string NativeSaveRoot()
-    {
-        std::lock_guard lock(gSaveRootMutex);
-        return gSaveRoot;
     }
 
     void SetNativeRecordingRoot(std::string root)
     {
-        std::lock_guard lock(gSaveRootMutex);
+        std::lock_guard lock(gNativeRootsMutex);
         gRecordingRoot = std::move(root);
-    }
-
-    std::string NativeRecordingRoot()
-    {
-        std::lock_guard lock(gSaveRootMutex);
-        return gRecordingRoot;
     }
 
     void SetNativeCaptureRoot(std::string root)
     {
-        std::lock_guard lock(gSaveRootMutex);
+        std::lock_guard lock(gNativeRootsMutex);
         gCaptureRoot = std::move(root);
-    }
-
-    std::string NativeCaptureRoot()
-    {
-        std::lock_guard lock(gSaveRootMutex);
-        return gCaptureRoot;
     }
 
     NativeDispatchResult StartNativeRecording(std::string_view path)
     {
-        if (!NativePathContained(NativeRecordingRoot(), path))
+        if (!NativePathContained(CopyNativeRoot(gRecordingRoot), path))
             return Failure("recording_containment", "recording path must remain below the owned recording root");
         auto* replay = GetContext()->GetReplayManager();
         if (replay == nullptr || replay->IsRecording())
             return Failure("recording_active", "native recording is already active");
         std::error_code error;
         std::filesystem::create_directories(std::filesystem::path(path).parent_path(), error);
-        if (error || !replay->StartRecording(std::string(path), k_MaxReplayTicks, IReplayManager::RecordType::SILENT))
+        if (error || !replay->StartRecording(std::string(path), k_MaxReplayTicks, IReplayManager::RecordType::NORMAL))
             return Failure("recording_start_failed", "the engine could not start native recording", { { "path", path } });
         return Success({ { "status", "active" }, { "path", path }, { "tick", getGameState().currentTicks } });
     }
@@ -941,7 +912,7 @@ namespace OpenRCT2::CommandLine
 
     NativeDispatchResult CaptureNativeFrame(std::string_view path, const json_t& view)
     {
-        if (!NativePathContained(NativeCaptureRoot(), path))
+        if (!NativePathContained(CopyNativeRoot(gCaptureRoot), path))
             return Failure("capture_containment", "capture path must remain below the owned capture root");
         const bool explicitView = !view.is_null();
         if (explicitView)
